@@ -1,6 +1,4 @@
-
 name: Sync GitHub to GitLab
-
 on:
   push:
     branches:
@@ -9,6 +7,7 @@ on:
 jobs:
   sync-to-gitlab:
     runs-on: ubuntu-latest
+    environment: Dev
 
     steps:
       - name: Checkout GitHub repository
@@ -16,10 +15,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure GitLab remote
+      - name: Check GitLab token
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
-          git remote add gitlab "https://${{ secrets.GITLAB_USERNAME }}:${{ secrets.GITLAB_TOKEN }}@git.cpe.kmutt.ac.th/senior-droneswarm/drone-aquarius.git"
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "ERROR: GITLAB_TOKEN is empty"
+            exit 1
+          fi
+
+          echo "GITLAB_TOKEN is available"
 
       - name: Push to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
+          git remote add gitlab "https://git-action:${GITLAB_TOKEN}@git.cpe.kmutt.ac.th/senior-droneswarm/drone-aquarius.git"
           git push gitlab main:main --force
