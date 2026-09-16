@@ -31,4 +31,4 @@ jobs:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
           git remote add gitlab "https://git-action:${GITLAB_TOKEN}@git.cpe.kmutt.ac.th/senior-droneswarm/drone-aquarius.git"
-          git push gitlab main:main 
+          git push gitlab main:main --force
