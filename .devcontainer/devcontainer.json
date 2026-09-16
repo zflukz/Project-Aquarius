@@ -1,0 +1,39 @@
+{
+  "name": "LaTeX Thai",
+  "dockerFile": "../Document/Dockerfile",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder}/Document,target=/workspace,type=bind",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "james-yu.latex-workshop"
+      ],
+      "settings": {
+        "latex-workshop.latex.tools": [
+          {
+            "name": "xelatex",
+            "command": "xelatex",
+            "args": ["-synctex=1", "-interaction=nonstopmode", "-file-line-error", "%DOC%"]
+          },
+          {
+            "name": "latexmk-xe",
+            "command": "latexmk",
+            "args": ["-xelatex", "-synctex=1", "-interaction=nonstopmode", "-file-line-error", "%DOC%"]
+          }
+        ],
+        "latex-workshop.latex.recipes": [
+          {
+            "name": "XeLaTeX",
+            "tools": ["xelatex"]
+          },
+          {
+            "name": "latexmk (XeLaTeX)",
+            "tools": ["latexmk-xe"]
+          }
+        ],
+        "latex-workshop.latex.recipe.default": "XeLaTeX",
+        "latex-workshop.view.pdf.viewer": "tab"
+      }
+    }
+  }
+}

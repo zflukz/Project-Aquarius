@@ -1,0 +1,189 @@
+\documentclass[12pt,a4paper]{article}
+
+% =================================================
+% Packages
+% =================================================
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{subfig}
+\usepackage{algpseudocode}
+\usepackage{algorithm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{fontspec}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage[normalem]{ulem}
+\usepackage{lscape}
+\usepackage{geometry}
+\usepackage{setspace}
+
+% =================================================
+% Page Setup
+% =================================================
+
+\geometry{
+    a4paper,
+    left=2.5cm,
+    right=2.5cm,
+    top=2.5cm,
+    bottom=2.5cm
+}
+
+% =================================================
+% Thai Font
+% =================================================
+
+\XeTeXlinebreaklocale "th"
+\XeTeXlinebreakskip = 0pt plus 1pt
+
+\setmainfont[
+    BoldFont={THSarabunNew_Bold.ttf},
+    ItalicFont={THSarabunNew_Italic.ttf},
+    BoldItalicFont={THSarabunNew_BoldItalic.ttf}
+]{THSarabunNew.ttf}
+
+% =================================================
+% Line Spacing
+% =================================================
+
+\setstretch{1.15}
+
+% =================================================
+% Section Formatting
+% =================================================
+
+\usepackage{titlesec}
+
+% Section
+\titleformat{\section}
+    {\centering\Large\bfseries}
+    {Section \thesection}
+    {0.5em}
+    {}
+
+% Subsection
+\titleformat{\subsection}
+    {\large\bfseries}
+    {\thesubsection}
+    {0.5em}
+    {}
+
+% =================================================
+% Document
+% =================================================
+
+\begin{document}
+
+
+% =================================================
+% SECTION 1
+% =================================================
+
+\section{ }
+\subsection{Project introduction \& problem statement} 
+
+In recent years, unmanned aerial vehicles (UAVs) have
+become increasingly important in search and rescue,
+disaster response, and emergency operations. UAVs can
+provide aerial information over large areas and access
+locations that may be difficult or dangerous for humans
+to reach.
+
+In emergency situations, locating humans quickly is an
+important task. Traditional search methods may require
+significant amounts of time and personnel, particularly
+when the search area is large or difficult to access.
+Therefore, an automated system capable of detecting and
+localizing possible humans from UAV data can help improve
+the efficiency of search operations.
+
+This project proposes an AI-based human detection and
+localization system capable of identifying possible human
+locations using UAV camera and sensor data. The system
+processes information collected by the UAV and estimates
+the location of detected humans.
+
+The detected information can then be reported to a
+monitoring system or ground station, allowing operators
+to view and analyze possible human locations.
+
+
+% =================================================
+% 1.1 Objectives
+% =================================================
+
+\subsection{Objectives}
+
+
+
+\begin{enumerate}
+
+    \item To develop an AI-based system capable of
+    detecting humans from UAV camera data.
+
+    \item To estimate and report the location of detected
+    humans using UAV sensor information.
+
+    \item To develop a system capable of processing
+    detection information efficiently.
+
+    \item To provide a monitoring interface for displaying
+    UAV and human detection information.
+
+    \item To evaluate the performance of the proposed
+    human detection and localization system.
+
+\end{enumerate}
+
+
+% =================================================
+% 1.2 Scope
+% =================================================
+
+\subsection{Scope of the Project}
+
+The scope of this project covers the development of a
+UAV-based human detection and localization system. The
+system consists of UAV hardware, camera and sensor
+components, an AI-based detection module, and a monitoring
+system.
+
+The system focuses on detecting possible humans within
+the UAV camera field of view and estimating their
+locations based on available sensor and positioning data.
+
+
+% =================================================
+% 1.3 Expected Results
+% =================================================
+
+\subsection{Expected Results}
+
+The expected result of this project is a prototype system
+that can detect possible humans from UAV camera data and
+provide their estimated locations to an operator.
+
+The system is expected to support search and rescue
+operations by reducing the time required to identify
+possible human locations and providing useful information
+for further investigation.
+
+
+% =================================================
+% SECTION 2
+% =================================================
+
+\clearpage
+
+
+% =================================================
+% END
+% =================================================
+
+\end{document}
