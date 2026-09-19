@@ -22,7 +22,7 @@
 \usepackage{lscape}
 \usepackage{geometry}
 \usepackage{setspace}
-
+\newcommand\tab[1][1cm]{\hspace*{#1}}
 % =================================================
 % Page Setup
 % =================================================
@@ -88,30 +88,40 @@
 \section{ }
 \subsection{Project introduction \& problem statement} 
 
-In recent years, unmanned aerial vehicles (UAVs) have
-become increasingly important in search and rescue,
-disaster response, and emergency operations. UAVs can
-provide aerial information over large areas and access
-locations that may be difficult or dangerous for humans
-to reach.
-
-In emergency situations, locating humans quickly is an
-important task. Traditional search methods may require
-significant amounts of time and personnel, particularly
-when the search area is large or difficult to access.
-Therefore, an automated system capable of detecting and
-localizing possible humans from UAV data can help improve
-the efficiency of search operations.
-
-This project proposes an AI-based human detection and
-localization system capable of identifying possible human
-locations using UAV camera and sensor data. The system
-processes information collected by the UAV and estimates
-the location of detected humans.
-
-The detected information can then be reported to a
-monitoring system or ground station, allowing operators
-to view and analyze possible human locations.
+\tab Floods are one of the most dangerous natural disasters, causing significant loss of life,
+property, and environmental resources. After a flood, rescue teams must locate people who may
+be stranded in isolated or dangerous areas. However, post-flood environments can be difficult to
+access due to damaged roads, strong currents, debris, unstable structures, and limited visibility.
+These conditions increase the risk to rescue personnel and can make conventional ground-based
+search operations slow and difficult. \newline
+\tab Recent studies have demonstrated the potential of Unmanned Aerial Vehicles (UAVs) to
+support search and rescue operations by providing aerial observation over large and difficult-toaccess areas. UAVs can collect information from above without requiring rescue personnel to
+immediately enter hazardous areas. Research on UAV-based disaster monitoring and cooperative
+navigation has also demonstrated that UAVs can be used to improve area coverage and provide
+information about disaster-affected environments. \newline
+\tab Human detection is an important part of search and rescue operations. However, detecting
+people manually from drone footage can be difficult and time-consuming, especially when
+monitoring large post-flood areas. In addition, factors such as low-light conditions, weather,
+complex backgrounds, and visual obstructions may affect the ability of rescue personnel to
+identify humans. Therefore, the camera mounted on the UAV can be used to capture images or
+video from the affected area, while image processing and AI-based human detection techniques
+can support the automatic identification of people from the captured visual data. This can reduce
+the need for continuous manual observation and help rescue personnel identify possible human
+locations more efficiently. \newline
+\tab However, detecting a person alone is not sufficient for rescue operations. Rescue
+personnel also need to know where the detected person is located so that the information
+can be used for further rescue planning. Therefore, the detected human position can be
+estimated using the UAV's sensor and positioning information and then transmitted to a ground
+station or rescue personnel in real time. \newline
+\tab Therefore, our team aims to develop a UAV-based system that combines AI-based human
+detection, thermal/visual sensing, localization, and wireless communication to assist rescue
+teams in post-flood environments. The primary objective of the system is to detect humans,
+determine and mark their locations, and transmit the detected information back to rescue
+personnel. By providing this information from a safe distance, the system can reduce the need
+for rescuers to immediately enter hazardous areas and support them in making safer and more
+effective decisions during flood response operations. At this stage, the system focuses on human
+detection and location reporting, rather than autonomous path planning or approaching the
+detected person.
 
 
 % =================================================
