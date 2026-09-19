@@ -61,6 +61,16 @@
 \usepackage{titlesec}
 
 % Section
+\titleformat{\subsubsection}
+  {\large\bfseries}
+  {\thesubsubsection}  
+  {1em}
+  {}
+
+\titlespacing*{\subsubsection}
+  {1cm}     % left indentation
+  {3.25ex}  % space before
+  {1.5ex}   % space after
 \titleformat{\section}
     {\centering\Large\bfseries}
     {Section \thesection}
@@ -79,12 +89,59 @@
 % =================================================
 
 \begin{document}
+\textbf{Computer Engineering Senior Project Proposal} \\
+\textbf{B. Eng. Computer Engineering} \\
+\textbf{Academic Year 2569}
+
+\vspace{0.35cm}
+
+% ------------------------------------------------
+% Project Title
+% ------------------------------------------------
+
+
+\textbf{Project Title:} 
+Smart Monitoring System for Personalized Gait Anomaly
+Detection in Elderly \newline  \\
+\vspace{0.35cm}
+% ------------------------------------------------
+% Group Members
+% ------------------------------------------------
+\textbf{Group Member:}   \newline
+\vspace{0.25cm}
+\tab
+    \begin{tabular}{@{}c p{2.5cm} p{3.5cm} l@{}}
+    1. & CHAYUTHPONG    & KARNKONSUE & 66070501011 \\
+    2. & NITIS          & JADIPANG   & 66070501020 \\
+    3. & TANAPHAT       & PHOMAK     & 66070501023 \\
+    4. & NATTAKARN      & PHOONET    & 66070501074
+    \end{tabular}
+
+\vspace{0.55cm}
+
+% ------------------------------------------------
+% Advisor
+% ------------------------------------------------
+
+Advisor: \quad Dr. PRAPONG PRECHAPRAPRANWONG
+% ------------------------------------------------
+% Push signature to bottom of page
+% ------------------------------------------------
+
+\vfill
+
+Signature:\rule{6.5cm}{0.4pt} (Advisor)
+
+\vspace{0.25cm}
+
+\hspace{2.5cm}(Dr. PRAPONG PRECHAPRAPRANWONG)
+
 
 
 % =================================================
 % SECTION 1
 % =================================================
-
+\clearpage
 \section{ }
 \subsection{Project introduction \& problem statement} 
 
@@ -156,13 +213,14 @@ detected person.
 % 1.2 Scope
 % =================================================
 
-\subsection{Scope of the Project}
+\subsection{Scope}
 
 The scope of this project covers the development of a
 UAV-based human detection and localization system. The
 system consists of UAV hardware, camera and sensor
 components, an AI-based detection module, and a monitoring
 system.
+\subsubsection{Solutions} 
 
 The system focuses on detecting possible humans within
 the UAV camera field of view and estimating their
@@ -173,7 +231,7 @@ locations based on available sensor and positioning data.
 % 1.3 Expected Results
 % =================================================
 
-\subsection{Expected Results}
+\hspace{2cm}\subsection{Expected Results}
 
 The expected result of this project is a prototype system
 that can detect possible humans from UAV camera data and
@@ -184,6 +242,7 @@ operations by reducing the time required to identify
 possible human locations and providing useful information
 for further investigation.
 
+\clearpage
 
 % =================================================
 % SECTION 2
