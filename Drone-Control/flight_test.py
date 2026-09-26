@@ -3,8 +3,9 @@ flight_test.py — automated flight simulation that exercises every
 movement axis from teleop_drone.py and verifies telemetry after each.
 """
 import asyncio
-from mavsdk import System
-from mavsdk.offboard import OffboardError, VelocityBodyYawspeed
+import mavsdk_grpc as mavsdk
+from mavsdk_grpc import System
+from mavsdk_grpc.offboard import OffboardError, VelocityBodyYawspeed
 
 SPEED_LINEAR = 2.5
 SPEED_VERT   = 1.2
@@ -24,9 +25,12 @@ async def get_pos(drone):
         return pos
 
 async def run():
+    import os
+    host = os.environ.get("PX4_HOST", "")
+    address = f"udpout://{host}:14540"
     drone = System()
-    print("Connecting to PX4 SITL udp://:14540 ...")
-    await drone.connect(system_address="udp://:14540")
+    print(f"Connecting to PX4 SITL {address} ...")
+    await drone.connect(system_address=address)
 
     async for state in drone.core.connection_state():
         if state.is_connected:

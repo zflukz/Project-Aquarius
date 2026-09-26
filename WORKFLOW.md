@@ -27,7 +27,7 @@ PX4 SITL + Gazebo (simulated drone)
 ```
 VM Server                          Your Computer (WSL2)
 ─────────────────────────────      ─────────────────────────────
-PX4 SITL + Gazebo Garden           ROS 2 Humble + MAVSDK
+PX4 SITL + Gazebo Harmonic           ROS 2 Humble + MAVSDK
                                    teleop_drone.py
                                    flight_test.py
                                    view_cam.py

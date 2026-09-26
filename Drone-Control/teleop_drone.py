@@ -3,8 +3,9 @@ import sys
 import termios
 import tty
 import select
-from mavsdk import System
-from mavsdk.offboard import OffboardError, VelocityBodyYawspeed
+import mavsdk_grpc as mavsdk
+from mavsdk_grpc import System
+from mavsdk_grpc.offboard import OffboardError, VelocityBodyYawspeed
 
 # ตารางการกดปุ่ม
 HELP_MSG = """
@@ -32,9 +33,12 @@ def get_key(settings):
     return key
 
 async def run():
+    import os
+    host = os.environ.get("PX4_HOST", "")
+    address = f"udpout://{host}:14540"
     drone = System()
-    print("กำลังเชื่อมต่อกับ PX4 SITL ผ่าน UDP :14540...")
-    await drone.connect(system_address="udp://:14540")
+    print(f"กำลังเชื่อมต่อกับ PX4 SITL ผ่าน {address}...")
+    await drone.connect(system_address=address)
 
     async for state in drone.core.connection_state():
         if state.is_connected:

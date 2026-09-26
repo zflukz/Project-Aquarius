@@ -1,0 +1,44 @@
+services:
+
+  px4-sim:
+    build:
+      context: .
+      dockerfile: ./docker/px4-sim/Dockerfile
+    container_name: px4-sim
+    networks:
+      - drone-net
+    ports:
+      - "14540:14540/udp"
+    stop_grace_period: 10s
+    restart: unless-stopped
+
+  novnc:
+    image: dougw/novnc
+    container_name: novnc
+    networks:
+      - drone-net
+    ports:
+      - "8080:8081"
+    environment:
+      - REMOTE_HOST=px4-sim
+      - REMOTE_PORT=5900
+    depends_on:
+      - px4-sim
+
+  drone-control:
+    build:
+      context: .
+      dockerfile: ./docker/drone-control/Dockerfile
+    container_name: drone-control
+    networks:
+      - drone-net
+    environment:
+      - PX4_HOST=px4-sim
+    depends_on:
+      - px4-sim
+    stdin_open: true
+    tty: true
+
+networks:
+  drone-net:
+    driver: bridge
