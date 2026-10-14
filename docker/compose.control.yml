@@ -1,0 +1,27 @@
+# CONTROL COMPUTER — drone-control station for drones simulated on the VM server.
+# PX4 on the VM sends drone N to this computer's udp 14540+N.
+#
+#   cd docker
+#   docker compose -f compose.control.yml up -d          # add --build to build from source
+#   docker compose -f compose.control.yml exec drone-control \
+#     bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
+#
+# Do not run together with compose.local.yml (same container name / ports).
+name: aquarius-control
+
+services:
+
+  drone-control:
+    build:
+      context: ..
+      dockerfile: docker/drone-control/Dockerfile
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-drone-control:${TAG:-latest}
+    container_name: drone-control
+    ports:
+      - "14540-14549:14540-14549/udp"       # one port per drone (DRONE_ID 0..9)
+    environment:
+      - DRONE_ID=${DRONE_ID:-0}
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

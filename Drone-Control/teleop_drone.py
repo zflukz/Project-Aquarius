@@ -34,8 +34,9 @@ def get_key(settings):
 
 async def run():
     import os
-    host = os.environ.get("PX4_HOST", "")
-    address = f"udpout://{host}:14540"
+    # PX4 ส่ง MAVLink ของโดรนลำที่ N มาที่ <เครื่องนี้>:14540+N (ดู docker/px4-sim/entrypoint.sh)
+    drone_id = int(os.environ.get("DRONE_ID", "0"))
+    address = os.environ.get("MAVLINK_URL", f"udpin://0.0.0.0:{14540 + drone_id}")
     drone = System()
     print(f"กำลังเชื่อมต่อกับ PX4 SITL ผ่าน {address}...")
     await drone.connect(system_address=address)

@@ -1,0 +1,68 @@
+# LOCAL TEST — everything on your computer: px4-sim + novnc + drone-control.
+# Also the place where images are built and pushed for the VM server.
+#
+#   cd docker
+#   docker compose -f compose.local.yml up -d --build          # run all locally
+#   docker compose -f compose.local.yml exec drone-control \
+#     bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
+#   docker compose -f compose.local.yml push px4-sim drone-control   # publish for the VM
+name: aquarius-local
+
+services:
+
+  px4-sim:
+    build:
+      context: ./px4-sim
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-px4-sim:${TAG:-latest}
+    container_name: px4-sim
+    networks:
+      - drone-net
+    environment:
+      - CONTROL_HOST=drone-control          # PX4 sends MAVLink to the drone-control container
+      - PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
+      - PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
+      - DRONE_SPACING=${DRONE_SPACING:-3}
+      - HEADLESS=${HEADLESS:-}
+      - QGC=${QGC:-1}                       # QGroundControl in noVNC
+      - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
+    volumes:
+      - gz-fuel-cache:/root/.gz/fuel        # keep downloaded worlds (Baylands) across rebuilds
+    stop_grace_period: 10s
+    restart: unless-stopped
+
+  novnc:
+    image: dougw/novnc
+    container_name: novnc
+    networks:
+      - drone-net
+    ports:
+      - "8080:8081"                         # http://localhost:8080/vnc.html
+    environment:
+      - REMOTE_HOST=px4-sim
+      - REMOTE_PORT=5900
+    depends_on:
+      - px4-sim
+
+  drone-control:
+    build:
+      context: ..
+      dockerfile: docker/drone-control/Dockerfile
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-drone-control:${TAG:-latest}
+    container_name: drone-control
+    networks:
+      - drone-net
+    environment:
+      - DRONE_ID=${DRONE_ID:-0}
+    # stays up as the control station — run scripts with `docker compose exec`
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+
+networks:
+  drone-net:
+    driver: bridge
+
+volumes:
+  gz-fuel-cache:

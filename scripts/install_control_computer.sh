@@ -28,7 +28,8 @@ echo ">>> [2/3] Python environment"
 cd "$PROJECT_DIR/Drone-Control"
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
-pip install mavsdk
+# scripts import mavsdk_grpc — the plain "mavsdk" package is now a different (native) API
+pip install mavsdk-grpc
 
 echo ">>> [3/3] Patching VM IP → $VM_IP"
 # Replace localhost UDP address with the VM server IP in both scripts

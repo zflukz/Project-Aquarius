@@ -26,8 +26,9 @@ async def get_pos(drone):
 
 async def run():
     import os
-    host = os.environ.get("PX4_HOST", "")
-    address = f"udpout://{host}:14540"
+    # PX4 sends MAVLink for drone N to <this computer>:14540+N (see docker/px4-sim/entrypoint.sh)
+    drone_id = int(os.environ.get("DRONE_ID", "0"))
+    address = os.environ.get("MAVLINK_URL", f"udpin://0.0.0.0:{14540 + drone_id}")
     drone = System()
     print(f"Connecting to PX4 SITL {address} ...")
     await drone.connect(system_address=address)
@@ -47,11 +48,17 @@ async def run():
     await drone.action.arm()
     print("Takeoff ...")
     await drone.action.takeoff()
-    await asyncio.sleep(6)
 
-    pos = await get_pos(drone)
+    # PX4 spools up ~5 s before it starts climbing, so poll instead of a fixed sleep
+    end = asyncio.get_event_loop().time() + 20
+    while True:
+        pos = await get_pos(drone)
+        if pos.relative_altitude_m > 1.0 or asyncio.get_event_loop().time() > end:
+            break
+        await asyncio.sleep(0.5)
     assert pos.relative_altitude_m > 1.0, \
         f"FAIL: takeoff altitude too low ({pos.relative_altitude_m:.1f} m)"
+    await asyncio.sleep(3)   # let it settle at takeoff altitude before offboard
     print(f"Altitude after takeoff: {pos.relative_altitude_m:.1f} m  PASS")
 
     # enter Offboard

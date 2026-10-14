@@ -1,0 +1,6 @@
+# build context is the repo root — only Drone-Control/ goes into the image
+*
+!Drone-Control/
+Drone-Control/.venv
+Drone-Control/**/__pycache__
+Drone-Control/.env

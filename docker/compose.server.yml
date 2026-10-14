@@ -1,0 +1,46 @@
+# VM SERVER — PX4 SITL + Gazebo (+ noVNC viewer). Pull-only: no git clone, no build.
+# The VM needs only this file and a .env next to it:
+#
+#   docker compose -f compose.server.yml pull
+#   docker compose -f compose.server.yml up -d
+#   docker compose -f compose.server.yml logs -f px4-sim
+#
+# Required in .env: CONTROL_HOST=<control computer IP>
+name: aquarius-server
+
+services:
+
+  px4-sim:
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-px4-sim:${TAG:-latest}
+    container_name: px4-sim
+    # host network: UDP MAVLink / Gazebo transport without Docker NAT in between
+    network_mode: host
+    environment:
+      - CONTROL_HOST=${CONTROL_HOST:?set CONTROL_HOST=<control computer IP> in .env}
+      - PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
+      - PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
+      - DRONE_SPACING=${DRONE_SPACING:-3}
+      - HEADLESS=${HEADLESS:-}
+      - QGC=${QGC:-1}                       # QGroundControl in noVNC
+      - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
+      - VNC_LISTEN=127.0.0.1                # VNC only reachable through noVNC
+    volumes:
+      - gz-fuel-cache:/root/.gz/fuel
+    stop_grace_period: 10s
+    restart: unless-stopped
+
+  novnc:
+    image: dougw/novnc
+    container_name: novnc
+    network_mode: host                      # serves http://<VM_IP>:8081/vnc.html
+    environment:
+      - REMOTE_HOST=127.0.0.1
+      - REMOTE_PORT=5900
+    depends_on:
+      - px4-sim
+    restart: unless-stopped
+
+volumes:
+  gz-fuel-cache:
