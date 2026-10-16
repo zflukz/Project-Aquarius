@@ -21,6 +21,14 @@ services:
       - "14540-14549:14540-14549/udp"       # one port per drone (DRONE_ID 0..9)
     environment:
       - DRONE_ID=${DRONE_ID:-0}
+      # optional: run once at start, e.g. AUTO_RUN=python3 mcpp_mission.py (MCPP coverage flight)
+      - AUTO_RUN=${AUTO_RUN:-}
+      - NUM_DRONES=${NUM_DRONES:-1}           # mcpp_mission.py: drones flown together
+      - AREA_W=${AREA_W:-80}                  # mcpp_mission.py: area east-west, m
+      - AREA_H=${AREA_H:-60}                  #                  area north-south, m
+      - SWEEP=${SWEEP:-5}                     #                  line spacing, m
+      - ALT=${ALT:-20}                        #                  altitude, m
+      - SPEED=${SPEED:-5}                     #                  m/s
     command: sleep infinity
     stdin_open: true
     tty: true

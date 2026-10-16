@@ -12,9 +12,11 @@
 #   PX4_SYS_AUTOSTART airframe id matching the model (gz_x500=4001, gz_x500_depth=4002)
 #   CONTROL_HOST     IP / hostname of the control computer; empty = PX4 defaults (localhost)
 #   HEADLESS         1 = no Gazebo GUI (saves CPU/GPU on the VM)
-#   QGC              1 = also run QGroundControl on the virtual display (seen in noVNC)
-#   SCREEN_SIZE      Xvfb screen, e.g. 1920x1080x24
+#   QGC              1 = also run QGroundControl on its own virtual display (second noVNC)
+#   SCREEN_SIZE      Xvfb screen, e.g. 1920x1080x24 (Gazebo :99 and QGC :100)
 #   VNC_LISTEN       x11vnc bind address (127.0.0.1 on the VM server)
+#   GZ_FOLLOW        drone index the Gazebo camera follows (default 0, empty = free camera)
+#   PX4_GZ_FOLLOW_OFFSET_X/Y/Z  camera offset from that drone, m (ENU world frame)
 set -e
 
 BIN=/px4/build/px4_sitl_default/bin
@@ -24,6 +26,7 @@ API_LOCAL_BASE=14640   # PX4 listens here (drone i -> +i)
 API_REMOTE_BASE=14540  # control computer MAVSDK listens here (drone i -> +i)
 GCS_LOCAL_BASE=18640
 GCS_REMOTE_PORT=14550  # QGroundControl, shared by all drones
+GZ_FOLLOW=${GZ_FOLLOW-0}   # unset -> follow drone 0, set empty -> free camera
 
 mkdir -p "$LOG_DIR"
 cd /px4
@@ -38,7 +41,14 @@ fi
 pkill -9 -f "$BIN/px4" 2>/dev/null || true
 pkill -9 -f "gz sim" 2>/dev/null || true
 pkill -9 -f /opt/qgc 2>/dev/null || true
+pkill -9 -x Xvfb 2>/dev/null || true
+pkill -9 -x x11vnc 2>/dev/null || true
+pkill -9 -x fluxbox 2>/dev/null || true
 rm -f /tmp/px4_lock-* /tmp/px4-sock-*
+# X locks survive a container restart -> Xvfb "Server is already active" -> no GUI / VNC
+rm -f /tmp/.X99-lock /tmp/.X100-lock /tmp/.X11-unix/X99 /tmp/.X11-unix/X100
+# same for QGC's single-instance lock -> "A second instance of QGroundControl is already running"
+rm -f /tmp/qgc-*.lock
 
 # pre-cache world assets from Gazebo Fuel (baylands_setup_guide.md section 3)
 if [ "$PX4_GZ_WORLD" = "baylands" ] && ! compgen -G "$FUEL_DIR/baylands/*/model.sdf" > /dev/null; then
@@ -48,18 +58,31 @@ if [ "$PX4_GZ_WORLD" = "baylands" ] && ! compgen -G "$FUEL_DIR/baylands/*/model.
         || echo "WARN: Baylands download failed — Gazebo may hang waiting for the world"
 fi
 
-# start virtual display
-Xvfb :99 -screen 0 "${SCREEN_SIZE:-1920x1080x24}" &
-XVFB_PID=$!
-sleep 2
-
-# start window manager
-fluxbox &
-FLUX_PID=$!
-
-# start VNC server
-x11vnc -display :99 -nopw -listen "$VNC_LISTEN" -xkb -forever -shared &
-VNC_PID=$!
+# one virtual screen + window manager + VNC server per viewer:
+#   :99  -> VNC 5900 -> noVNC "novnc"      Gazebo
+#   :100 -> VNC 5901 -> noVNC "novnc-qgc"  QGroundControl (only with QGC=1)
+DISPLAY_PIDS=()
+# fluxbox: open QGroundControl / Gazebo maximized on their screens
+mkdir -p ~/.fluxbox
+cat > ~/.fluxbox/apps <<'EOF'
+[app] (name=QGroundControl)
+  [Maximized] {yes}
+[end]
+[app] (name=gz-sim-gui)
+  [Maximized] {yes}
+[end]
+EOF
+start_screen() {   # $1 display, $2 VNC port
+    Xvfb "$1" -screen 0 "${SCREEN_SIZE:-1920x1080x24}" &
+    DISPLAY_PIDS+=($!)
+    sleep 2
+    DISPLAY="$1" fluxbox &
+    DISPLAY_PIDS+=($!)
+    x11vnc -display "$1" -rfbport "$2" -nopw -listen "$VNC_LISTEN" -xkb -forever -shared &
+    DISPLAY_PIDS+=($!)
+}
+start_screen :99 5900
+if [ "$QGC" = "1" ]; then start_screen :100 5901; fi
 sleep 2
 
 PX4_PIDS=()
@@ -70,7 +93,7 @@ cleanup() {
     kill "${PX4_PIDS[@]}" 2>/dev/null || true
     pkill -f "gz sim" 2>/dev/null || true
     pkill -f /opt/qgc 2>/dev/null || true
-    kill $VNC_PID $FLUX_PID $XVFB_PID 2>/dev/null || true
+    kill "${DISPLAY_PIDS[@]}" 2>/dev/null || true
     wait
     exit 0
 }
@@ -128,12 +151,41 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
     fi
 done
 
-# QGroundControl in noVNC — not root (QGC refuses), auto-connects on udp 14550.
+# QGroundControl on its own screen :100 (noVNC "novnc-qgc") — not root (QGC refuses), auto-connects on udp 14550.
 # Not in PX4_PIDS: closing QGC does not restart the simulation.
 if [ "$QGC" = "1" ] && [ -x /opt/qgc/AppRun ]; then
-    su qgc -c "DISPLAY=$DISPLAY /opt/qgc/AppRun" > "$LOG_DIR/qgc.log" 2>&1 &
+    su qgc -c "DISPLAY=:100 /opt/qgc/AppRun" > "$LOG_DIR/qgc.log" 2>&1 &
     echo "QGroundControl started (log: $LOG_DIR/qgc.log)"
 fi
+
+# Gazebo camera follows drone $GZ_FOLLOW, so the Gazebo view moves with the drone like QGC's map.
+# PX4's rcS publishes /gui/track once, often before the GUI is up, and gz-gui 8.4 ends up with an
+# empty follow_target -> camera stays at the spawn point. The GUI's /gui/follow services work, but
+# a call made before the GUI has loaded the model is accepted (also shown in /gui/currently_tracked)
+# and silently does nothing -> repeat until the GUI camera really leaves its start pose.
+follow_camera() {
+    target="${PX4_SIM_MODEL#*gz_}_$GZ_FOLLOW"
+    cam_pose() { timeout 5 gz topic -e -t /gui/camera/pose -n 1 2>/dev/null; }
+    start_pose=""
+    for _ in $(seq 1 120); do
+        sleep 5
+        [ -n "$start_pose" ] || start_pose=$(cam_pose)
+        [ -n "$start_pose" ] || continue   # GUI not up yet
+        gz service -s /gui/follow --reqtype gz.msgs.StringMsg --reptype gz.msgs.Boolean \
+            --timeout 3000 --req "data: \"$target\"" > /dev/null 2>&1 || continue
+        gz service -s /gui/follow/offset --reqtype gz.msgs.Vector3d --reptype gz.msgs.Boolean \
+            --timeout 3000 --req "x: ${PX4_GZ_FOLLOW_OFFSET_X:--8}, y: ${PX4_GZ_FOLLOW_OFFSET_Y:--8}, \
+z: ${PX4_GZ_FOLLOW_OFFSET_Z:-5}" > /dev/null 2>&1
+        sleep 3
+        pose=$(cam_pose)
+        if [ -n "$pose" ] && [ "$pose" != "$start_pose" ]; then
+            echo "Gazebo camera follows $target"
+            return 0
+        fi
+    done
+    echo "WARN: Gazebo camera does not follow $target (move it by hand in the GUI)"
+}
+if [ -z "$HEADLESS" ] && [ -n "$GZ_FOLLOW" ]; then follow_camera & fi
 
 # exit (and let docker restart us) as soon as any PX4 instance dies
 wait -n "${PX4_PIDS[@]}"

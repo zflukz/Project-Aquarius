@@ -23,8 +23,9 @@ services:
       - PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
       - DRONE_SPACING=${DRONE_SPACING:-3}
       - HEADLESS=${HEADLESS:-}
-      - QGC=${QGC:-1}                       # QGroundControl in noVNC
+      - QGC=${QGC:-1}                       # QGroundControl in its own noVNC (:8082)
       - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
+      - GZ_FOLLOW=${GZ_FOLLOW-0}            # Gazebo camera follows drone N (empty = free camera)
       - VNC_LISTEN=127.0.0.1                # VNC only reachable through noVNC
     volumes:
       - gz-fuel-cache:/root/.gz/fuel
@@ -34,10 +35,20 @@ services:
   novnc:
     image: dougw/novnc
     container_name: novnc
-    network_mode: host                      # serves http://<VM_IP>:8081/vnc.html
+    network_mode: host                      # Gazebo: http://<VM_IP>:8081/vnc.html
     environment:
       - REMOTE_HOST=127.0.0.1
       - REMOTE_PORT=5900
+    depends_on:
+      - px4-sim
+    restart: unless-stopped
+
+  novnc-qgc:
+    image: dougw/novnc
+    container_name: novnc-qgc
+    network_mode: host                      # QGroundControl: http://<VM_IP>:8082/vnc.html
+    # image always listens on 8081 -> override, host network has only one 8081
+    command: /root/noVNC/utils/launch.sh --vnc 127.0.0.1:5901 --listen 8082 --web /root/noVNC/build/
     depends_on:
       - px4-sim
     restart: unless-stopped

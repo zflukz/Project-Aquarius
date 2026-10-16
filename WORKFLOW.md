@@ -12,6 +12,7 @@ PX4 SITL + Gazebo on the VM server  (Baylands world, 1..N drones)
 Control computer
       ├──► Keyboard Teleop        (teleop_drone.py, DRONE_ID=i)
       ├──► Automated Flight Test  (flight_test.py,  DRONE_ID=i)
+      ├──► MCPP Coverage Flight   (mcpp_mission.py, NUM_DRONES=N — auto path over the map)
       ├──► QGroundControl         (all drones on :14550)
       └──► Camera Stream          (view_cam.py)
             │
@@ -43,7 +44,7 @@ cd docker
 cp .env.example .env                       # first time only
 docker compose -f compose.local.yml up -d --build
 docker compose -f compose.local.yml logs -f px4-sim     # wait for "Ready for takeoff!"
-# Gazebo view: http://localhost:8080/vnc.html
+# Gazebo view: http://localhost:8080/vnc.html   QGroundControl view: http://localhost:8082/vnc.html
 ```
 
 `px4-sim`, `novnc` and `drone-control` all run on your computer. MAVLink takes the same path as in
@@ -93,17 +94,29 @@ cd docker
 docker compose -f compose.control.yml up -d          # pulls drone-control (or add --build)
 ```
 
-Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp` and `8081/tcp` from the control computer.
-The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`.
+Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp` and `8081-8082/tcp` from the control computer.
+The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`.
 
 ### 1d. Native install — no Docker
 
+Same software and the same MAVLink ports as the Docker images (Ubuntu 24.04, Gazebo Harmonic, PX4 `main`,
+ROS 2 Jazzy). Docker stays the main path; native is for running without Docker and for comparing speed.
+
 ```bash
-bash scripts/install_sim_server.sh <CONTROL_COMPUTER_IP>   # VM server (PX4 + Gazebo)
-bash scripts/install_control_computer.sh <VM_SERVER_IP>    # control computer (ROS 2 + MAVSDK)
+# VM server: Gazebo Harmonic (apt) + PX4 built + Baylands cache (~30-60 min)
+bash scripts/install_sim_server.sh
+CONTROL_HOST=<CONTROL_COMPUTER_IP> PX4_NUM_DRONES=1 HEADLESS=1 bash scripts/run_sim_native.sh   # Ctrl+C stops
+
+# control computer: ROS 2 (Jazzy on 24.04, Humble on 22.04) + mavsdk-grpc in Drone-Control/.venv
+bash scripts/install_control_computer.sh
+source /opt/ros/jazzy/setup.bash && source Drone-Control/.venv/bin/activate
+cd Drone-Control && python3 flight_test.py          # DRONE_ID / NUM_DRONES as in Docker
+
+# native vs Docker speed on the VM
+bash docker/bench_sim.sh both
 ```
 
-> These scripts still use the older single-port MAVLink setup. Docker is the maintained path.
+Remove again: `scripts/uninstall_sim_server.sh [--purge-build-deps]`, `scripts/uninstall_control_computer.sh`.
 
 ---
 
@@ -159,6 +172,24 @@ Connect → GPS lock → Arm → Takeoff
 ```
 
 Each step prints live telemetry (altitude, lat, lon). Test passes when the drone lands and `in_air == False`.
+
+### 3a+. MCPP coverage flight (auto path over the map)
+
+`mcpp_mission.py` plans a coverage path (MCPP: balanced area split + Spanning Tree Coverage
+per drone), uploads it to PX4 as a **mission** (so QGroundControl draws it on the map) and flies
+it: takeoff → lawnmower path over the whole area → RTL → land.
+
+```bash
+$DC drone-control bash -c "$ROS && python3 mcpp_mission.py"                    # drone 0
+$DC -e NUM_DRONES=2 drone-control bash -c "$ROS && python3 mcpp_mission.py"    # drones 0+1 share the area
+$DC drone-control python3 mcpp_mission.py --plan-only -n 3                     # just print the plan
+```
+
+Or let it start by itself with the container: `AUTO_RUN=python3 mcpp_mission.py` in `docker/.env`
+(see `docker/README.md` → "MCPP coverage flight"). Area / spacing / altitude: `AREA_W`, `AREA_H`,
+`AREA_N`, `AREA_E`, `SWEEP`, `ALT`, `SPEED` (env) or `--help`.
+Watch it: Gazebo <http://localhost:8080/vnc.html>, QGroundControl <http://localhost:8082/vnc.html>
+(VM: ports 8081 / 8082).
 
 ### 3b. Keyboard Teleop (manual)
 
@@ -250,13 +281,17 @@ Project-Aquarius/
 │   │   └── entrypoint.sh           starts N PX4 instances, MAVLink links → CONTROL_HOST
 │   └── drone-control/
 │       ├── Dockerfile              ROS 2 Jazzy + MAVSDK + Drone-Control/
+│       ├── entrypoint.sh           sources ROS 2, runs $AUTO_RUN once (e.g. mcpp_mission.py)
 │       └── Dockerfile.dockerignore
 ├── scripts/
-│   ├── install_sim_server.sh       native VM server install
-│   └── install_control_computer.sh native control computer install
+│   ├── install_sim_server.sh       native VM server install (Gazebo apt + PX4 built + Baylands)
+│   ├── run_sim_native.sh           native twin of px4-sim/entrypoint.sh (N drones, same ports)
+│   ├── install_control_computer.sh native control computer install (ROS 2 + mavsdk-grpc venv)
+│   └── uninstall_*.sh              remove the native installs
 └── Drone-Control/
     ├── teleop_drone.py             keyboard controller → PX4 via MAVSDK (DRONE_ID)
     ├── flight_test.py              automated flight test (arm/takeoff/move/land, DRONE_ID)
+    ├── mcpp_mission.py             MCPP coverage path → PX4 mission, 1..N drones (NUM_DRONES)
     └── view_cam.py                 ROS 2 subscriber → OpenCV camera window
 ```
 
@@ -267,7 +302,8 @@ Project-Aquarius/
 ```
 Control computer                                    VM server
 teleop_drone.py ─┐                                  ┌─► PX4 instance 0 ─┐
-flight_test.py  ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
+flight_test.py  ─┤                                  │
+mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
 QGroundControl  ◄────────────── udp 14550 ──────────┘   ...             ─┘
 view_cam.py ──► rclpy ◄── ROS 2 DDS ◄── ros_gz_bridge ◄── Gazebo /camera (gz_x500_depth)
 ```

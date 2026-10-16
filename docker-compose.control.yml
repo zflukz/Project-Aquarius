@@ -1,0 +1,20 @@
+# Control computer: ROS 2 + MAVSDK control station for drones simulated on the VM server.
+#   docker compose -f docker-compose.control.yml up -d --build
+#   docker compose -f docker-compose.control.yml exec drone-control \
+#     bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
+# PX4 on the VM sends drone N to this computer's udp 14540+N.
+services:
+  drone-control:
+    build:
+      context: .
+      dockerfile: ./docker/drone-control/Dockerfile
+    image: aquarius/drone-control
+    container_name: drone-control
+    ports:
+      - "14540-14549:14540-14549/udp"       # one port per drone (DRONE_ID 0..9)
+    environment:
+      - DRONE_ID=${DRONE_ID:-0}
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

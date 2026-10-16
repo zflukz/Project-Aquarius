@@ -4,3 +4,4 @@
 Drone-Control/.venv
 Drone-Control/**/__pycache__
 Drone-Control/.env
+!docker/drone-control/entrypoint.sh

@@ -27,9 +27,14 @@ RUN pip3 install mavsdk-grpc --break-system-packages
 
 WORKDIR /drone-control
 
+# sources ROS 2, runs $AUTO_RUN once (e.g. the MCPP coverage flight), then CMD
+COPY docker/drone-control/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # which drone to control: MAVSDK listens on udp 14540 + DRONE_ID
 # (MAVLINK_URL overrides the whole address, e.g. serial:///dev/ttyUSB0:57600)
 ENV DRONE_ID=0
 EXPOSE 14540-14549/udp
 
-CMD ["bash", "-c", "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "flight_test.py"]

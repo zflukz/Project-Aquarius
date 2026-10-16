@@ -41,7 +41,7 @@ RUN make px4_sitl_default
 RUN gz fuel download -u "https://fuel.gazebosim.org/1.0/openrobotics/models/Baylands" \
     || echo "WARN: Baylands pre-cache failed, entrypoint will retry"
 
-# QGroundControl on the same virtual display as Gazebo -> visible in noVNC (QGC=1).
+# QGroundControl on its own virtual display :100 -> VNC 5901 -> second noVNC (QGC=1).
 # AppImage is extracted (no FUSE in Docker); QGC refuses to run as root -> user "qgc".
 # It auto-connects via PX4's default GCS link (18570+i -> localhost:14550).
 ARG QGC_VERSION=v5.1.5
@@ -68,7 +68,7 @@ ENV PX4_SIM_MODEL=gz_x500 \
 #              PX4 listens on 18640+i and sends to CONTROL_HOST:14550   (QGroundControl)
 EXPOSE 14640-14649/udp
 EXPOSE 18640-18649/udp
-EXPOSE 5900
+EXPOSE 5900 5901
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

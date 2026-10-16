@@ -11,10 +11,10 @@ a separate computer, later real drones.
 
 | Path | What |
 | :--- | :--- |
-| `docker/` | **everything Docker / simulator** — see `docker/README.md` |
-| `Drone-Control/` | `flight_test.py`, `teleop_drone.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
+| `docker/` | **everything Docker / simulator** — see `docker/README.md`; telemetry + camera plan: `docker/telemetry_plan.md` |
+| `Drone-Control/` | `flight_test.py`, `teleop_drone.py`, `mcpp_mission.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
-| `scripts/` | legacy **native** (non-Docker) install scripts |
+| `scripts/` | **native** (non-Docker) install / run / uninstall — same software + ports as the images |
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |
 | `Robomaster-TT/`, `InfoData/` | side experiments / Obsidian notes |
 
@@ -35,8 +35,8 @@ Three modes, same two images (`ghcr.io/zflukz/aquarius-px4-sim`, `ghcr.io/zflukz
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc + drone-control on one bridge network; also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc, `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + drone-control on one bridge network; also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -48,8 +48,8 @@ MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/
 
 PX4's own default links (14580+i → localhost:14540+i, 18570+i, …) still exist; ours are extra.
 
-`entrypoint.sh` flow: kill stale px4/gz + `/tmp/px4_lock-*` → ensure Baylands Fuel cache →
-Xvfb/fluxbox/x11vnc → for each drone `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`,
+`entrypoint.sh` flow: kill stale px4/gz/QGC/Xvfb + `/tmp/px4_lock-*`, X + QGC locks → ensure Baylands Fuel cache →
+Xvfb/fluxbox/x11vnc per screen (`:99`→5900 Gazebo, `:100`→5901 QGC) → for each drone `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`,
 wait until booted, add the two `mavlink start ... -t CONTROL_IP` links → `wait -n`, exit if any
 PX4 dies (Docker restarts the container).
 
@@ -72,6 +72,107 @@ PX4 dies (Docker restarts the container).
    multi-drone plan, Baylands guide paths fixed (`px4-sim` container, `/px4`).
 8. `.gitattributes` (`*.sh eol=lf`).
 9. `scripts/install_control_computer.sh`: `pip install mavsdk` → `mavsdk-grpc`.
+
+## Change log — QGC split + MCPP coverage flight (2026-10-14)
+
+1. **Two viewers:** QGC runs on its own Xvfb `:100` → x11vnc 5901 → `novnc-qgc` (local 8082, VM 8082 via
+   command override because `dougw/novnc` hard-codes 8081). Gazebo stays on `:99` → 5900 → `novnc`.
+   fluxbox `~/.fluxbox/apps` opens both maximized.
+2. **`Drone-Control/mcpp_mission.py`:** MCPP = balanced region-growing partition of a coarse grid
+   (2·SWEEP cells) + Kruskal spanning tree per drone + Spanning Tree Coverage (Hamiltonian cycle over
+   SWEEP sub-cells) → lat/lon → PX4 mission (QGC shows it) → takeoff, mission, explicit RTL. N drones
+   (`NUM_DRONES`, one `System(port=50051+i)` each), altitude `ALT + 3·i`. `--plan-only` prints the plan.
+3. **drone-control entrypoint** (`docker/drone-control/entrypoint.sh`): sources ROS 2, runs `AUTO_RUN`
+   once (e.g. `python3 mcpp_mission.py`), then CMD. MCPP env in compose files / `.env.example`.
+
+## Change log — Gazebo camera follow + restart fixes + telemetry plan (2026-10-16)
+
+Bug reported: drone moves in QGC but the Gazebo view does not. Causes found in the running sim:
+
+1. **Camera never followed the drone.** PX4's `px4-rc.gzsim` publishes `/gui/track` once; in gz-gui 8.4
+   the GUI ended up with an empty `follow_target` (`/gui/currently_tracked`), camera stayed at its start
+   pose (-6,0,6) → drone flew out of view. `/gui/follow` service works, but a call before the GUI loaded
+   the model is accepted and silently ignored. Now `entrypoint.sh` `follow_camera` (background) calls
+   `/gui/follow` + `/gui/follow/offset` every 5 s until `/gui/camera/pose` actually changes.
+   Env `GZ_FOLLOW` (drone index, default 0, empty = free camera), offset `PX4_GZ_FOLLOW_OFFSET_X/Y/Z`
+   (default -8/-8/5). Compose files + `.env.example` + README updated.
+2. **`docker restart` broke the screens:** stale `/tmp/.X99-lock` / `.X100-lock` → Xvfb "Server is
+   already active" → no Gazebo GUI / VNC; stale `/tmp/qgc-*.lock` → "A second instance of
+   QGroundControl is already running". Entrypoint now kills Xvfb/x11vnc/fluxbox and removes the locks.
+3. **Same place in QGC and Gazebo:** already true — GPS comes from the world's `spherical_coordinates`
+   (Baylands 37.4122, -121.9989); drone reported 37.412215, -121.999020, QGC map = Baylands Park.
+   Don't set `PX4_HOME_*` with Baylands (moves GPS, not the 3D park).
+4. **Telemetry + camera plan** → `docker/telemetry_plan.md` (summary below, "Telemetry & camera").
+
+Verified 2026-10-16 (entrypoint `docker cp`'d + `docker restart`; then `px4-sim` rebuilt — only the
+entrypoint layers, rest cached — and `up -d --force-recreate` → `Gazebo camera follows x500_0`; image
+**not pushed** to GHCR yet): no X / QGC lock errors after restart, log `Gazebo camera follows x500_0` ~20 s after boot,
+MCPP flight (`AREA_W=40 AREA_H=30`) screenshots of `:99` show the camera tracking the drone across the park;
+QGC on `:100` connected, Baylands map.
+
+## Telemetry & camera (plan, 2026-10-16) — details in `docker/telemetry_plan.md`
+
+Listed from the running sim (`gz_x500`, Baylands). Four sources, from raw to high level:
+
+| Source | Where / how | Status | Main content |
+| :--- | :--- | :--- | :--- |
+| A. Gazebo gz-transport | inside px4-sim, `gz topic`, Python `gz.transport13` | ✅ available | IMU 250 Hz, mag 100 Hz, baro 50 Hz, navsat 30 Hz; ground truth `/world/<w>/dynamic_pose/info`; clock, stats (RTF), wind; cameras/lidar/flow only on other models |
+| B. PX4 uORB → ROS 2 | `uxrce_dds_client` already runs per instance → 127.0.0.1:8888, ns none / `uav_i` | ❌ needs `MicroXRCEAgent` (px4-sim) + `px4_msgs` (drone-control) | 31 `/fmu/out/*`: `battery_status`, `sensor_combined`, `vehicle_gnss`, `vehicle_global/local_position`, `vehicle_attitude`, `vehicle_odometry`, `vehicle_status`, `failsafe_flags`, ... |
+| C. MAVLink | 14540+i (MAVSDK), 14550 (QGC) | ✅ works | `SYS_STATUS`, `BATTERY_STATUS`, `GPS_RAW_INT`, `HIGHRES_IMU`, `SCALED_PRESSURE`, `ATTITUDE*`, `GLOBAL_POSITION_INT`, `ODOMETRY`, `VIBRATION`, `ESTIMATOR_STATUS`, `ESC_*`, ... |
+| D. MAVSDK telemetry | drone-control Python | ✅ works | 33 streams: `battery`, `health`, `position`, `gps_info`, `raw_gps`, `imu`, `scaled_pressure`, `attitude_*`, `velocity_ned`, `odometry`, `ground_truth`, `flight_mode`, `status_text`, `wind`, ... |
+
+Battery in SITL = PX4 `battery_simulator` (`SIM_BAT_DRAIN`, `SIM_BAT_MIN_PCT`).
+
+Telemetry steps: **T1** `telemetry_bridge.py` (MAVSDK → JSON lines → server) · **T5** ground truth from
+`dynamic_pose/info` · **T4** telemetry-server (time-series DB + Grafana / WebSocket, `ros2 bag`) ·
+**T2** XRCE agent + `px4_msgs` · **T3** DDS discovery server VM ↔ control.
+
+Camera: default `gz_x500` has **no camera**. Step 0: `gz_x500_mono_cam_down` (4014) / `gz_x500_mono_cam`
+(4010) / `gz_x500_depth` (4002) / `gz_x500_gimbal` (4019). **C1** PX4's `libGstCameraSystem.so` is already
+built + loaded (`server.config`) → RTP/H.264 UDP to `PX4_VIDEO_HOST_IP:5600+i` (QGC video / ffplay);
+x264/rtp/udp GStreamer plugins present. **C2** save geo-tagged frames via `gz.transport13`. **C3**
+`ros_gz_bridge` → ROS 2 Image (with T2/T3, compress). **C4** `ffmpeg x11grab :99` records the scene view.
+None of the steps is implemented yet; C1–C4 not tested.
+
+## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
+
+`./bench_sim.sh [native|docker|both]`: N PX4 instances idle in one world, headless, no QGC; measures
+`boot_s` (rcS done), `ready_s` (`px4-listener home_position` → `valid_hpos: True`; "Ready for takeoff"
+is not usable — PX4 only says it once a GCS is connected), `rtf` (Δ sim_time of `/world/<w>/stats` /
+Δ wall time, two samples only so the gz CLI doesn't skew CPU), `cpu_%` / `rss_mb` (utime+stime and VmRSS
+of `bin/px4 -i|gz sim` pids from `/proc`; Docker Desktop fallback: `docker stats`, whole container).
+Native mode mirrors `entrypoint.sh` (`px4 -i i -d` from `$PX4_DIR`, wait per instance). Docker mode
+starts `drone-control` too when the compose file has it (compose.local's `CONTROL_HOST=drone-control`
+otherwise blocks px4-sim for minutes). Results → `bench_results.csv`.
+
+Tested 2026-10-16: native mode inside a throwaway `aquarius-px4-sim` container (`PX4_DIR=/px4`) →
+boot 17.7 s, RTF 1.006, CPU 77 %, 731 MB; docker mode with `compose.local.yml` on Docker Desktop →
+boot 40.3 s, RTF 1.018, CPU 80 % (docker stats), 691 MB. **Not run on the real VM yet** — that is the
+real comparison (both modes via `/proc`). Gotcha: Git Bash needs `MSYS_NO_PATHCONV=1` (set in the script).
+
+## Change log — native scripts (`scripts/`, 2026-10-16)
+
+Brought the native path in line with Docker (needed for a fair `bench_sim.sh` comparison):
+- `install_sim_server.sh`: Gazebo Harmonic from the OSRF **apt** repo (was a multi-hour colcon source build
+  in `~/gz_ws`), PX4 `main` (`PX4_REF`) + `make px4_sitl_default`, Baylands `gz fuel download`; no IP
+  argument. Removes the old `mavlink start -x -u 14540 -t <IP>` line it used to append to `px4-rc.mavlink`
+  (that port clashed with PX4's own links).
+- **New `run_sim_native.sh`**: native twin of `docker/px4-sim/entrypoint.sh` — same env names, `wait_ready`
+  per instance, links `14640+i → CONTROL_HOST:14540+i` and `18640+i → :14550`; no Xvfb/VNC/QGC
+  (GUI on `$DISPLAY`, else forces `HEADLESS=1`); Ctrl+C stops all.
+- `install_control_computer.sh`: ROS 2 Jazzy on 24.04 / Humble on 22.04 (was Humble only); no VM IP, no
+  `sed` of `udp://:14540` (scripts use `DRONE_ID` / `MAVLINK_URL`); deletes the old `Drone-Control/.env`.
+- `uninstall_*`: `pkill` only `$PX4_DIR/.../bin/px4` (old `pkill -f px4` / `ruby` hit unrelated processes,
+  incl. the px4-sim container); leaves `gz sim` alone if px4-sim runs; old source-build `-dev` packages
+  only with `--purge-build-deps`; removes ROS Jazzy and Humble; kills leftover `mavsdk_server`.
+- All `scripts/*.sh` now LF (were CRLF in the working tree).
+
+Tested: `bash -n` all; `run_sim_native.sh` with `PX4_NUM_DRONES=2` inside the px4-sim image
+(`PX4_DIR=/px4`, no DISPLAY): instance 0 started Gazebo, instance 1 "gazebo already running world: baylands",
+both links printed, SIGINT stopped cleanly. `install_control_computer.sh` in a fresh `ubuntu:24.04`
+container (+ `sudo`): ROS 2 Jazzy + venv OK, `import mavsdk_grpc, rclpy, cv2, cv_bridge` OK,
+`mcpp_mission.py --plan-only` OK; `uninstall_control_computer.sh` exit 0, venv gone (an almost empty
+`/opt/ros/jazzy/lib` stays behind).
 
 ## Verification
 
@@ -148,7 +249,23 @@ images (`vsc-project-aquarius-*`, `texlive/texlive`).
       **The current `ghcr.io/zflukz/aquarius-px4-sim:latest` image is the OLD one** (no QGC, old
       `wait_ready` bug). The fixes so far were only tested by `docker cp` into a running container.
 
-### Resume here (next session)
+### Docker run — 2026-10-14
+
+- [x] `px4-sim` rebuilt (QGC layer + `wait_ready` fix), 11.7 GB. `up -d --force-recreate`: links open
+      (`drone0 (sysid 1) -> 172.19.0.x:14540`), `QGroundControl started`, QGC auto-connects (Ready / Hold, Baylands map).
+- [x] Split screens: x11vnc on 5900 + 5901, Gazebo window on `:99`, QGC on `:100`, both 1920x1033 (maximized).
+      Checked by screenshot inside the container; `novnc-qgc` command override starts websockify on 8082.
+- [x] `mcpp_mission.py --plan-only` for 1–4 drones: balanced regions, STC cycle covers every sub-cell (asserts).
+- [x] **MCPP flight PASSED** (1 drone, `AREA_W=40 AREA_H=30`, 14 waypoints, 235 m, GUI on): upload, takeoff,
+      14/14 waypoints, RTL, "Disarmed by landing".
+- **Bugs found:** (a) `set_return_to_launch_after_mission` after upload has no effect and PX4 still just
+  loiters → script now sets it before upload **and** calls `action.return_to_launch()`. (b) With Gazebo GUI +
+  QGC on one screen px4-sim hit ~400 % CPU (6 vCPU WSL) and the sim **froze** (PX4 hung in gz-transport
+  `Publish()`, lockstep → no MAVLink). Recovered by recreating px4-sim; later runs with the GUI were fine.
+  `HEADLESS=1` (~95 % CPU) is the fallback when the PC is loaded.
+- Leftover `mavsdk_server` from killed `docker exec` runs again blocked udp 14540 (gotcha below).
+
+### Resume here (next session) — superseded by the 2026-10-14 run above
 
 1. Start Docker Desktop.
 2. `cd docker && docker compose -f compose.local.yml down` — free memory before building.
@@ -171,9 +288,8 @@ images (`vsc-project-aquarius-*`, `texlive/texlive`).
 
 ### NOT yet verified
 
-- [ ] Rebuilt `px4-sim` image (QGC layer + both fixes) starts cleanly with `up -d --force-recreate`.
-- [ ] Gazebo + QGC visible in the browser (http://localhost:8080/vnc.html) — so far only checked by
-      screenshot of `:99` inside the container.
+- [ ] Gazebo (8080) and QGC (8082) checked in a real browser — so far only screenshots of `:99` / `:100`.
+- [ ] `mcpp_mission.py` with `NUM_DRONES=2` in the sim, and `AUTO_RUN` start via compose.
 - [ ] `PX4_NUM_DRONES=2`: both drones spawn in one world, each reachable on 14540 / 14541, both in QGC.
 - [ ] `docker compose push` to GHCR and pull on a real VM; split-mode flight from the control computer.
 - [ ] Docker Desktop (Windows) published UDP range 14540-14549 delivers PX4's packets to the container.
@@ -182,10 +298,9 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 
 ## Known issues / TODO
 
-- `scripts/install_sim_server.sh` / `install_control_computer.sh` (native path) still use the old
-  single-port MAVLink idea (`mavlink start -u 14540 -t IP`, sed patch of `udp://:14540` that no longer
-  matches anything). Docker is the maintained path; update or retire these.
-- `px4-sim` image has no `ros_gz_bridge` → camera (`view_cam.py`) doesn't work in the Docker split yet.
+- Native path (`scripts/`) rewritten 2026-10-16; `install_sim_server.sh` (full PX4 build) not run end-to-end yet.
+- `px4-sim` image has no `ros_gz_bridge` → camera (`view_cam.py`) doesn't work in the Docker split yet
+  (default `gz_x500` has no camera at all — see `docker/telemetry_plan.md` §3).
 - `CONTROL_HOST` is resolved once at container start; if the control computer's IP changes, recreate `px4-sim`.
 - noVNC / x11vnc have no password — keep 8081 on LAN / VPN only.
 - GHCR packages are private by default → make public or `docker login` on the VM.

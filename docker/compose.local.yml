@@ -25,8 +25,9 @@ services:
       - PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
       - DRONE_SPACING=${DRONE_SPACING:-3}
       - HEADLESS=${HEADLESS:-}
-      - QGC=${QGC:-1}                       # QGroundControl in noVNC
+      - QGC=${QGC:-1}                       # QGroundControl in its own noVNC (:8082)
       - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
+      - GZ_FOLLOW=${GZ_FOLLOW-0}            # Gazebo camera follows drone N (empty = free camera)
     volumes:
       - gz-fuel-cache:/root/.gz/fuel        # keep downloaded worlds (Baylands) across rebuilds
     stop_grace_period: 10s
@@ -38,10 +39,23 @@ services:
     networks:
       - drone-net
     ports:
-      - "8080:8081"                         # http://localhost:8080/vnc.html
+      - "8080:8081"                         # Gazebo: http://localhost:8080/vnc.html
     environment:
       - REMOTE_HOST=px4-sim
       - REMOTE_PORT=5900
+    depends_on:
+      - px4-sim
+
+  novnc-qgc:
+    image: dougw/novnc
+    container_name: novnc-qgc
+    networks:
+      - drone-net
+    ports:
+      - "8082:8081"                         # QGroundControl: http://localhost:8082/vnc.html
+    environment:
+      - REMOTE_HOST=px4-sim
+      - REMOTE_PORT=5901
     depends_on:
       - px4-sim
 
@@ -55,6 +69,14 @@ services:
       - drone-net
     environment:
       - DRONE_ID=${DRONE_ID:-0}
+      # optional: run once at start, e.g. AUTO_RUN=python3 mcpp_mission.py (MCPP coverage flight)
+      - AUTO_RUN=${AUTO_RUN:-}
+      - NUM_DRONES=${NUM_DRONES:-1}           # mcpp_mission.py: drones flown together
+      - AREA_W=${AREA_W:-80}                  # mcpp_mission.py: area east-west, m
+      - AREA_H=${AREA_H:-60}                  #                  area north-south, m
+      - SWEEP=${SWEEP:-5}                     #                  line spacing, m
+      - ALT=${ALT:-20}                        #                  altitude, m
+      - SPEED=${SPEED:-5}                     #                  m/s
     # stays up as the control station — run scripts with `docker compose exec`
     command: sleep infinity
     stdin_open: true
