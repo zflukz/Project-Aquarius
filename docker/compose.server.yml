@@ -1,4 +1,4 @@
-# VM SERVER — PX4 SITL + Gazebo (+ noVNC viewer). Pull-only: no git clone, no build.
+# VM SERVER — PX4 SITL + Gazebo (+ noVNC viewers + telemetry / camera). Pull-only: no git clone, no build.
 # The VM needs only this file and a .env next to it:
 #
 #   docker compose -f compose.server.yml pull
@@ -6,6 +6,11 @@
 #   docker compose -f compose.server.yml logs -f px4-sim
 #
 # Required in .env: CONTROL_HOST=<control computer IP>
+#
+# Telemetry / camera (service telemetry, details: telemetry_plan.md):
+#   camera in the browser  http://<VM_IP>:8083/          (needs a camera model, e.g. gz_x500_mono_cam_down)
+#   all topics (Foxglove)  ws://<VM_IP>:8765
+#   ROS 2 on the VM        docker exec telemetry with-ros ros2 topic list
 name: aquarius-server
 
 services:
@@ -26,6 +31,14 @@ services:
       - QGC=${QGC:-1}                       # QGroundControl in its own noVNC (:8082)
       - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
       - GZ_FOLLOW=${GZ_FOLLOW-0}            # Gazebo camera follows drone N (empty = free camera)
+      - GZ_PARTITION=${GZ_PARTITION:-aquarius}   # Gazebo transport partition, same in telemetry
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}        # PX4 uXRCE-DDS domain, same in telemetry
+      # drone camera models: GstCameraSystem streams RTP/H.264 to this IP, udp 5600+i (127.0.0.1 = QGC in noVNC)
+      - PX4_VIDEO_HOST_IP=${PX4_VIDEO_HOST_IP:-127.0.0.1}
+      # drone camera size / rate (CPU rendering: 1280x960@30 -> RTF ~0.03), empty = model default
+      - CAMERA_WIDTH=${CAMERA_WIDTH-640}
+      - CAMERA_HEIGHT=${CAMERA_HEIGHT-480}
+      - CAMERA_RATE=${CAMERA_RATE-10}
       - VNC_LISTEN=127.0.0.1                # VNC only reachable through noVNC
     volumes:
       - gz-fuel-cache:/root/.gz/fuel
@@ -51,6 +64,31 @@ services:
     command: /root/noVNC/utils/launch.sh --vnc 127.0.0.1:5901 --listen 8082 --web /root/noVNC/build/
     depends_on:
       - px4-sim
+    restart: unless-stopped
+
+  telemetry:
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-telemetry:${TAG:-latest}
+    container_name: telemetry
+    # host network = px4-sim's network: PX4 uXRCE client -> 127.0.0.1:8888, Gazebo transport discovery
+    network_mode: host
+    ipc: host                               # ROS 2 / Fast-DDS shared memory with other host-network ROS nodes
+    environment:
+      - PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}  # same as px4-sim -> topic names
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
+      - GZ_PARTITION=${GZ_PARTITION:-aquarius}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - GZ_CAMERA=${GZ_CAMERA-}             # camera "<link>/<sensor>", empty = from PX4_SIM_MODEL, none = off
+      - WEB_VIDEO_PORT=${WEB_VIDEO_PORT:-8083}
+      - FOXGLOVE_PORT=${FOXGLOVE_PORT:-8765}
+      - GT_RATE=${GT_RATE-30}                # ground truth Hz (/uav_i/gz/ground_truth), empty = off
+      - RECORD=${RECORD:-}                  # 1 = ros2 bag (mcap) -> data/bags/<date>
+      - RECORD_REGEX=${RECORD_REGEX:-.*/fmu/out/.*|/uav_[0-9]+/gz/.*}
+    volumes:
+      - ./data:/data                        # bags on the VM: ~/aquarius/data/bags
+    depends_on:
+      - px4-sim
+    stop_grace_period: 10s
     restart: unless-stopped
 
 volumes:

@@ -17,6 +17,7 @@ services:
       dockerfile: docker/drone-control/Dockerfile
     image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-drone-control:${TAG:-latest}
     container_name: drone-control
+    init: true                              # reaps exited mavsdk_server (aquarius rtl / stop) -> no zombies
     ports:
       - "14540-14549:14540-14549/udp"       # one port per drone (DRONE_ID 0..9)
     environment:

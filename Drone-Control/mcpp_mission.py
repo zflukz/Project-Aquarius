@@ -22,6 +22,7 @@ Env / args (args win):
   DRONE_ID     first drone id (single drone: just this one)      default 0
   AREA_W/AREA_H  area size east / north in metres                 default 80 / 60
   AREA_N/AREA_E  area centre offset from drone 0 home (north/east) default 0 / 0
+  AREA_CENTER  area centre as "LAT,LON" instead (wins over AREA_N/AREA_E)
   SWEEP        line spacing in metres (sensor footprint)          default 5
   ALT          flight altitude (drone i flies ALT + i*ALT_STEP)   default 20
   SPEED        m/s                                                 default 5
@@ -35,8 +36,11 @@ import asyncio
 import heapq
 import math
 import os
+import sys
+import traceback
 
 EARTH_R = 6378137.0
+SYSTEMS = []   # every MAVSDK System, so exit_clean() can stop their mavsdk_server
 DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
 
@@ -233,6 +237,7 @@ async def connect(drone_id, address, timeout):
     from mavsdk_grpc import System
     # one mavsdk_server per drone -> own gRPC port
     drone = System(port=50051 + drone_id)
+    SYSTEMS.append(drone)
     print(f"[drone{drone_id}] connecting {address} ...")
     await drone.connect(system_address=address)
 
@@ -282,13 +287,13 @@ async def fly(drone_id, drone, waypoints, alt, speed):
                 break
 
     await drone.mission.start_mission()
-    print(f"{tag} coverage mission started")
+    print(f"{tag} mission started")
     async for prog in drone.mission.mission_progress():
         print(f"{tag} waypoint {prog.current}/{prog.total}")
         if prog.total and prog.current == prog.total:
             break
 
-    print(f"{tag} coverage done, returning to launch ...")
+    print(f"{tag} mission done, returning to launch ...")
     await drone.action.return_to_launch()   # explicit too, in case PX4 just loiters
     async for in_air in drone.telemetry.in_air():
         if not in_air:
@@ -306,6 +311,10 @@ async def run(args):
     starts = [latlon_to_ne(home0.latitude_deg, home0.longitude_deg, h.latitude_deg, h.longitude_deg)
               for _, h in links]
 
+    if args.center:
+        lat, lon = (float(v) for v in args.center.strip("{} ").split(","))
+        args.area_n, args.area_e = latlon_to_ne(home0.latitude_deg, home0.longitude_deg, lat, lon)
+        print(f"area centre {lat:.6f},{lon:.6f} = {args.area_n:+.0f} m N, {args.area_e:+.0f} m E of home")
     paths, owner, rows, cols = plan(starts, args.area_w, args.area_h, args.area_n, args.area_e, args.sweep)
     print_plan(paths, owner, rows, cols, args.sweep)
 
@@ -318,6 +327,28 @@ async def run(args):
     print("\n=== MCPP coverage flight PASSED ===")
 
 
+def exit_clean(coro):
+    """Run coro, then stop every mavsdk_server and exit. Without this, an error (or SystemExit) leaves
+    MAVSDK threads + the mavsdk_server child alive: the script hangs and keeps udp 14540+i busy."""
+    code = 0
+    try:
+        asyncio.run(coro)
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            print(e.code if isinstance(e.code, str) else f"exit {e.code}", file=sys.stderr)
+            code = 1
+    except KeyboardInterrupt:
+        code = 130
+    except Exception:
+        traceback.print_exc()
+        code = 1
+    for s in SYSTEMS:
+        s._stop_mavsdk_server()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 def main():
     env = os.environ.get
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -327,6 +358,7 @@ def main():
     ap.add_argument("--area-h", type=float, default=float(env("AREA_H", "60")), help="north-south size, m")
     ap.add_argument("--area-n", type=float, default=float(env("AREA_N", "0")), help="centre north of home, m")
     ap.add_argument("--area-e", type=float, default=float(env("AREA_E", "0")), help="centre east of home, m")
+    ap.add_argument("--center", default=env("AREA_CENTER", ""), help="area centre LAT,LON (instead of --area-n/-e)")
     ap.add_argument("--sweep", type=float, default=float(env("SWEEP", "5")), help="line spacing, m")
     ap.add_argument("--alt", type=float, default=float(env("ALT", "20")))
     ap.add_argument("--alt-step", type=float, default=float(env("ALT_STEP", "3")))
@@ -341,7 +373,7 @@ def main():
         starts = [(k * args.spacing, 0.0) for k in range(args.num_drones)]
         print_plan(*plan(starts, args.area_w, args.area_h, args.area_n, args.area_e, args.sweep), args.sweep)
         return
-    asyncio.run(run(args))
+    exit_clean(run(args))
 
 
 if __name__ == "__main__":

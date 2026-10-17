@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# aquarius — one command for the Aquarius drone sim: start it, fly waypoints / coverage, check, stop.
+#
+#   aquarius init [local|server|control] [--drones N] [--world W] [--camera] [--headless]
+#                 [--control-host IP] [--build]
+#   aquarius start mission LAT,LON [LAT,LON ...] [--drone N] [--alt M] [--speed V] [--max-dist M] [--detach]
+#   aquarius start coverage [LAT,LON] [--size WxH] [--drones N] [--sweep M] [--alt M] [--detach]
+#   aquarius status [--drone N]          containers + armed / mode / battery / position
+#   aquarius rtl | land [--drone N]      return to launch / land now (stops a running mission script first)
+#   aquarius stop [--drone N]            = rtl
+#   aquarius logs [mission|coverage|px4|telemetry] [--drone N]
+#   aquarius urls                        Gazebo / QGC / camera / Foxglove links
+#   aquarius down                        stop the containers
+#   aquarius install                     link this script to ~/.local/bin/aquarius
+#
+# Examples (Baylands home is ~37.4122,-121.9989):
+#   aquarius init --camera
+#   aquarius start mission 37.4125,-121.9985 37.4128,-121.9992
+#   aquarius start mission "{37.4125,-121.9985}" --alt 30 --drone 1
+#   aquarius start coverage 37.4126,-121.9990 --size 40x30
+#
+# Missions run in the background (Docker: inside drone-control, native: Drone-Control/.venv), so
+# Ctrl+C only stops following the log — the drone keeps flying. Stop it with `aquarius rtl` / `land`.
+# Mode: Docker if the drone-control container runs, else native (scripts/install_control_computer.sh).
+# Env: AQUARIUS_DOCKER_DIR (compose files + .env, default <repo>/docker or the current directory)
+set -e
+
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+if [ -n "$AQUARIUS_DOCKER_DIR" ]; then DOCKER_DIR=$AQUARIUS_DOCKER_DIR
+elif [ -f "$REPO_DIR/docker/compose.local.yml" ]; then DOCKER_DIR=$REPO_DIR/docker
+else DOCKER_DIR=$PWD; fi       # VM: only compose.server.yml + .env next to this script
+DC_DIR=/drone-control           # Drone-Control/ inside the drone-control image
+NATIVE_PY=$REPO_DIR/Drone-Control/.venv/bin/python
+export MSYS_NO_PATHCONV=1       # Git Bash: keep /tmp/... paths for docker exec
+
+die()  { echo "aquarius: $*" >&2; exit 1; }
+info() { echo ">>> $*"; }
+usage() { sed -n '2,/^set -e/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit "${1:-0}"; }
+
+running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
+use_docker() { running drone-control; }
+
+# --- options shared by the commands
+DRONE=${DRONE_ID:-0}; ALT=; SPEED=; MAXDIST=; DETACH=; SIZE=; SWEEP=; NDRONES=
+MODE=; WORLD=; CAMERA=; HEADLESS=; CONTROL_IP=; BUILD=
+ARGS=()
+parse_opts() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --drone)        DRONE=$2; shift ;;
+            --alt)          ALT=$2; shift ;;
+            --speed)        SPEED=$2; shift ;;
+            --max-dist)     MAXDIST=$2; shift ;;
+            --size)         SIZE=$2; shift ;;
+            --sweep)        SWEEP=$2; shift ;;
+            --drones|-n)    NDRONES=$2; shift ;;
+            --world)        WORLD=$2; shift ;;
+            --control-host) CONTROL_IP=$2; shift ;;
+            --camera)       CAMERA=1 ;;
+            --headless)     HEADLESS=1 ;;
+            --build)        BUILD=1 ;;
+            --detach|-d)    DETACH=1 ;;
+            -h|--help)      usage ;;
+            -*)             die "unknown option $1 (aquarius --help)" ;;
+            *)              ARGS+=("$1") ;;
+        esac
+        shift
+    done
+    [[ "$DRONE" =~ ^[0-9]+$ ]] || die "--drone must be a number"
+}
+
+# --- run a Drone-Control script: in the drone-control container, or natively
+pyenv() {   # env assignments for the script
+    local e="DRONE_ID=$DRONE"
+    [ -n "$ALT" ]   && e+=" ALT=$ALT"
+    [ -n "$SPEED" ] && e+=" SPEED=$SPEED"
+    [ -n "$MAXDIST" ] && e+=" MAX_DIST=$MAXDIST"
+    echo "$e"
+}
+q() { printf '%q ' "$@"; }
+
+run_fg() {   # python script + args, wait for it
+    if use_docker; then
+        docker exec drone-control bash -c "source /opt/ros/jazzy/setup.bash; cd $DC_DIR && $(pyenv) python3 -u $(q "$@")"
+    else
+        [ -x "$NATIVE_PY" ] || die "no drone-control container and no $NATIVE_PY — run 'aquarius init' or scripts/install_control_computer.sh"
+        (cd "$REPO_DIR/Drone-Control" && env $(pyenv) "$NATIVE_PY" -u "$@")
+    fi
+}
+
+# job files: /tmp/aquarius-<job>-<drone>.{log,pid} (in the container, or on this computer)
+job_pid() {   # job -> pid if alive
+    local f=/tmp/aquarius-$1-$DRONE.pid
+    if use_docker; then
+        docker exec drone-control bash -c "p=\$(cat $f 2>/dev/null) && kill -0 \$p 2>/dev/null && echo \$p" || true
+    else
+        p=$(cat "$f" 2>/dev/null) && kill -0 "$p" 2>/dev/null && echo "$p" || true
+    fi
+}
+
+run_bg() {   # job script args... — start in the background, then follow the log
+    local job=$1; shift
+    local log=/tmp/aquarius-$job-$DRONE.log pid=/tmp/aquarius-$job-$DRONE.pid
+    for j in mission coverage; do
+        [ -z "$(job_pid $j)" ] || die "a $j is already running for drone $DRONE — 'aquarius stop --drone $DRONE' first"
+    done
+    free_link
+    if use_docker; then
+        docker exec -d drone-control bash -c "source /opt/ros/jazzy/setup.bash; cd $DC_DIR && echo \$\$ > $pid && exec env $(pyenv) python3 -u $(q "$@") > $log 2>&1"
+    else
+        [ -x "$NATIVE_PY" ] || die "no drone-control container and no $NATIVE_PY"
+        (cd "$REPO_DIR/Drone-Control" && nohup env $(pyenv) "$NATIVE_PY" -u "$@" > "$log" 2>&1 & echo $! > "$pid")
+    fi
+    sleep 1
+    info "$job started for drone $DRONE (log: aquarius logs $job --drone $DRONE)"
+    [ -n "$DETACH" ] && return
+    echo "    following the log — Ctrl+C stops following only, the drone keeps flying"
+    follow "$job"
+    # mission_cli.py ends with "=== MISSION DONE ===", mcpp_mission.py with "=== MCPP ... PASSED ==="
+    if use_docker; then docker exec drone-control grep -qE "=== .*(DONE|PASSED) ===" "$log"
+    else grep -qE "=== .*(DONE|PASSED) ===" "$log"; fi || die "$job did not finish — see the log above (aquarius status)"
+}
+
+follow() {   # job -> tail its log until the script exits
+    local log=/tmp/aquarius-$1-$DRONE.log pid=/tmp/aquarius-$1-$DRONE.pid
+    if use_docker; then
+        docker exec drone-control bash -c "p=\$(cat $pid 2>/dev/null); tail -n +1 \${p:+--pid=\$p} -f $log"
+    else
+        local p; p=$(cat "$pid" 2>/dev/null)
+        tail -n +1 ${p:+--pid=$p} -f "$log"
+    fi
+}
+
+# MAVSDK listens on udp 14540+drone; a mission script or a mavsdk_server left over (killed docker exec,
+# CLAUDE.md gotcha) keeps that port and the next script hangs -> stop them first
+free_link() {
+    local port=$((14540 + DRONE))
+    if use_docker; then
+        docker exec drone-control bash -c "
+            for j in mission coverage; do p=\$(cat /tmp/aquarius-\$j-$DRONE.pid 2>/dev/null) && kill \$p 2>/dev/null; done
+            pkill -f '[m]avsdk_server.*:$port\b' 2>/dev/null; true"
+    else
+        for j in mission coverage; do p=$(cat "/tmp/aquarius-$j-$DRONE.pid" 2>/dev/null) && kill "$p" 2>/dev/null; done
+        pkill -f "[m]avsdk_server.*:$port\b" 2>/dev/null || true
+    fi
+    sleep 1
+}
+
+# --- commands
+compose_file() {
+    case "$1" in
+        local)   echo compose.local.yml ;;
+        server)  echo compose.server.yml ;;
+        control) echo compose.control.yml ;;
+        *)       die "mode must be local, server or control" ;;
+    esac
+}
+
+set_env() {   # KEY VALUE -> docker/.env
+    if grep -q "^$1=" "$DOCKER_DIR/.env"; then sed -i "s|^$1=.*|$1=$2|" "$DOCKER_DIR/.env"
+    else echo "$1=$2" >> "$DOCKER_DIR/.env"; fi
+}
+
+cmd_init() {
+    MODE=${ARGS[0]:-local}
+    local file; file=$(compose_file "$MODE")
+    [ -f "$DOCKER_DIR/$file" ] || die "$DOCKER_DIR/$file not found (set AQUARIUS_DOCKER_DIR)"
+    command -v docker > /dev/null || die "docker not installed"
+    cd "$DOCKER_DIR"
+    if [ ! -f .env ]; then
+        [ -f .env.example ] && cp .env.example .env || touch .env
+        info "created $DOCKER_DIR/.env"
+    fi
+    # options are saved in .env, so later 'up' / restarts keep them
+    [ -n "$CONTROL_IP" ] && set_env CONTROL_HOST "$CONTROL_IP"
+    [ -n "$NDRONES" ]    && set_env PX4_NUM_DRONES "$NDRONES"
+    [ -n "$WORLD" ]      && set_env PX4_GZ_WORLD "$WORLD"
+    [ -n "$HEADLESS" ]   && set_env HEADLESS 1
+    if [ -n "$CAMERA" ]; then set_env PX4_SIM_MODEL gz_x500_mono_cam_down; set_env PX4_SYS_AUTOSTART 4014; fi
+    if [ "$MODE" = server ] && ! grep -qE '^CONTROL_HOST=.+' .env; then
+        die "server mode needs the control computer IP: aquarius init server --control-host <IP>"
+    fi
+
+    info "starting $file in $DOCKER_DIR"
+    if [ "$MODE" = local ]; then
+        docker compose -f "$file" up -d ${BUILD:+--build}
+    else
+        docker compose -f "$file" pull
+        docker compose -f "$file" up -d
+    fi
+    [ "$MODE" = control ] && { info "control station up — waiting for the VM's PX4: aquarius status"; return; }
+
+    info "waiting for PX4 (Gazebo + drone boot, ~20-60 s) ..."
+    local n
+    n=$(grep -E '^PX4_NUM_DRONES=' .env | cut -d= -f2); n=${n:-1}
+    for _ in $(seq 1 120); do
+        if docker logs px4-sim 2>&1 | grep -q "drone$((n - 1)) (sysid"; then
+            docker logs px4-sim 2>&1 | grep -E "drone[0-9]+ \(sysid" | tail -n "$n"
+            info "ready — $n drone(s)"
+            cmd_urls
+            return
+        fi
+        running px4-sim || die "px4-sim stopped — docker logs px4-sim"
+        sleep 3
+    done
+    die "PX4 not ready after 6 min — docker logs px4-sim"
+}
+
+cmd_urls() {
+    running px4-sim || return 0
+    local h=localhost gz=8080
+    # compose.server.yml: host network, noVNC Gazebo on 8081
+    [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' px4-sim)" = host ] && { h="<VM_IP>"; gz=8081; }
+    echo "    Gazebo      http://$h:$gz/vnc.html"
+    echo "    QGC         http://$h:8082/vnc.html"
+    if running telemetry; then
+        echo "    camera      http://$h:8083/"
+        echo "    Foxglove    ws://$h:8765"
+    fi
+}
+
+cmd_start() {
+    local what=${ARGS[0]}
+    case "$what" in
+        mission)
+            [ ${#ARGS[@]} -ge 2 ] || die "usage: aquarius start mission LAT,LON [LAT,LON ...]"
+            run_bg mission mission_cli.py goto "${ARGS[@]:1}" ;;
+        coverage)
+            local a=(mcpp_mission.py --drone-id "$DRONE" -n "${NDRONES:-1}")
+            [ -n "${ARGS[1]}" ] && a+=(--center "${ARGS[1]}")
+            if [ -n "$SIZE" ]; then
+                [[ "$SIZE" =~ ^[0-9.]+x[0-9.]+$ ]] || die "--size must be WxH in metres, e.g. 40x30"
+                a+=(--area-w "${SIZE%x*}" --area-h "${SIZE#*x}")
+            fi
+            [ -n "$SWEEP" ] && a+=(--sweep "$SWEEP")
+            [ -n "$ALT" ]   && a+=(--alt "$ALT")
+            [ -n "$SPEED" ] && a+=(--speed "$SPEED")
+            run_bg coverage "${a[@]}" ;;
+        *) die "usage: aquarius start mission LAT,LON ... | aquarius start coverage [LAT,LON]" ;;
+    esac
+}
+
+cmd_status() {
+    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc" || true
+    for j in mission coverage; do
+        local p; p=$(job_pid $j)
+        [ -n "$p" ] && echo "    $j running for drone $DRONE (aquarius logs $j)"
+    done
+    if [ -n "$(job_pid mission)$(job_pid coverage)" ]; then
+        echo "    (drone link is used by the running $([ -n "$(job_pid mission)" ] && echo mission || echo coverage) — see its log)"
+        return
+    fi
+    run_fg mission_cli.py status
+}
+
+cmd_action() {   # rtl | land
+    free_link
+    run_fg mission_cli.py "$1"
+}
+
+cmd_logs() {
+    case "${ARGS[0]:-mission}" in
+        mission|coverage) follow "${ARGS[0]:-mission}" ;;
+        px4)       docker logs -f --tail 100 px4-sim ;;
+        telemetry) docker logs -f --tail 100 telemetry ;;
+        *)         die "logs: mission | coverage | px4 | telemetry" ;;
+    esac
+}
+
+cmd_down() {
+    cd "$DOCKER_DIR"
+    for f in compose.local.yml compose.server.yml compose.control.yml; do
+        [ -f "$f" ] || continue
+        [ -n "$(docker compose -f "$f" ps -q 2>/dev/null)" ] && { info "stopping $f"; docker compose -f "$f" down; }
+    done
+    return 0
+}
+
+cmd_install() {
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$SCRIPT_DIR/aquarius" "$HOME/.local/bin/aquarius"
+    info "linked ~/.local/bin/aquarius -> $SCRIPT_DIR/aquarius"
+    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "    add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
+}
+
+[ $# -gt 0 ] || usage 1
+CMD=$1; shift
+parse_opts "$@"
+case "$CMD" in
+    init)       cmd_init ;;
+    start)      cmd_start ;;
+    status)     cmd_status ;;
+    rtl|stop)   cmd_action rtl ;;
+    land)       cmd_action land ;;
+    logs)       cmd_logs ;;
+    urls)       cmd_urls ;;
+    down)       cmd_down ;;
+    install)    cmd_install ;;
+    help|-h|--help) usage ;;
+    *)          die "unknown command '$CMD' (aquarius --help)" ;;
+esac

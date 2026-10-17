@@ -7,11 +7,16 @@ Everything below was listed from the **running** `px4-sim` container (PX4 `main`
 Gazebo Harmonic 8.15, gz-gui 8.4, model `gz_x500`, world `baylands`) on 2026-10-16, unless a line says
 **(not tested)**.
 
+> **2026-10-17 — implemented:** service **`telemetry`** (`docker/telemetry/`, image `aquarius-telemetry`)
+> in `compose.server.yml` + `compose.local.yml` = steps **T2** (uXRCE agent + `px4_msgs`), **T5** (ground
+> truth as ROS topic), **C3** (camera → ROS 2 Image) plus camera in the browser, Foxglove and `ros2 bag`
+> (part of **T4**). See **§4**. Still open: T1 (MAVSDK JSON), T3 (DDS VM ↔ control), T4 database, C2, C4.
+
 ```
  Gazebo (sensors, ground truth, camera)
    │ gz-transport topics          (A)  ── only inside px4-sim (or GZ_RELAY)
    ▼
- PX4 SITL (uORB)                  (B)  ── uXRCE-DDS → ROS 2  (agent missing today)
+ PX4 SITL (uORB)                  (B)  ── uXRCE-DDS → ROS 2  (telemetry container, §4)
    │ MAVLink                      (C)  ── 14540+i (MAVSDK), 14550 (QGC)   ✅ works today
    ▼
  MAVSDK telemetry API             (D)  ── drone-control, Python
@@ -63,7 +68,9 @@ Python bindings `gz.transport13` are installed in px4-sim (`import gz.transport1
 
 PX4 SITL **already starts** `uxrce_dds_client` for each instance (log: `init UDP agent IP:127.0.0.1,
 port:8888`). Namespace: drone 0 none, drone i `uav_i` (override with `PX4_UXRCE_DDS_NS`). DDS domain
-= `ROS_DOMAIN_ID` (default 0). **Missing today:** `MicroXRCEAgent` (px4-sim) and `px4_msgs` (drone-control).
+= `ROS_DOMAIN_ID` (default 0). Agent + `px4_msgs` now run in the **`telemetry`** container (§4).
+Since PX4 v1.16 messages with a `MESSAGE_VERSION` get a suffix on the ROS topic, e.g.
+`/fmu/out/vehicle_status_v4` (unversioned ones keep the plain name) → check with `ros2 topic list`.
 
 Published by default (`/px4/src/modules/uxrce_dds_client/dds_topics.yaml`, 31 topics):
 
@@ -131,7 +138,12 @@ Simulated by PX4 `battery_simulator`: drains over time, never below `SIM_BAT_MIN
 
 Order: T1 → T5 → T4 → T2 + T3 (only when raw sensors at full rate or ROS 2 algorithms are needed).
 
+Done 2026-10-17 (§4): **T2**, **T5** (ROS topic `/uav_i/gz/ground_truth`, `ground_truth.py`), `ros2 bag` part of **T4**.
+
 Open question: "server" = the VM running px4-sim, or a separate backend (DB / web)? T4 placement depends on it.
+
+**2026-10-17:** T1 + T4 are replaced by [`communication_plan.md`](communication_plan.md): MAVLink → MQTT (`mavlink_mqtt.py`)
+→ Telegraf → InfluxDB → Grafana, Kafka optional.
 
 ---
 
@@ -159,8 +171,8 @@ PX4 already builds and loads `libGstCameraSystem.so` (`gz_bridge/server.config`,
 
 - Local: default `127.0.0.1:5600` = QGC inside px4-sim → QGC (noVNC 8082) shows the video
   (QGC: Application Settings → Video → Source "UDP h.264 Video Stream", port 5600).
-- Split: `entrypoint.sh` exports `PX4_VIDEO_HOST_IP=$CONTROL_IP` before starting PX4;
-  `compose.control.yml` publishes `5600-5609/udp`. View with QGC, `ffplay`, VLC or OpenCV:
+- Split: set `PX4_VIDEO_HOST_IP=<control computer IP>` in `.env` (passed to px4-sim since 2026-10-17,
+  default `127.0.0.1`); open `5600-5609/udp` on the control computer. View with QGC, `ffplay`, VLC or OpenCV:
   ```bash
   gst-launch-1.0 udpsrc port=5600 ! application/x-rtp,encoding-name=H264,payload=96 \
     ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink
@@ -175,7 +187,7 @@ Script in px4-sim with Python `gz.transport13`: subscribe
 save JPEG every N m or N s together with ground-truth pose + navsat lat/lon + sim time
 (geo-tagged images → mosaic / coverage check of MCPP). Output to a volume, upload to the server.
 
-### C3 — ROS 2 images (with T2/T3) (not tested)
+### C3 — ROS 2 images — implemented in the `telemetry` container (§4)
 
 `ros_gz_bridge parameter_bridge <topic>@sensor_msgs/msg/Image[gz.msgs.Image` has to run where Gazebo
 runs (px4-sim; needs ROS 2 in that image or a sidecar container sharing the network). Publish to
@@ -188,3 +200,87 @@ runs (px4-sim; needs ROS 2 in that image or a sidecar container sharing the netw
 (QGC). Gazebo GUI also has `/gui/screenshot`. Good for demo videos of a mission.
 
 Order: Step 0 + C1 (see the camera in QGC) → C2 (dataset for MCPP evaluation) → C3 only with ROS 2.
+C3 is done first (2026-10-17) because the `telemetry` container needed ROS 2 anyway.
+
+---
+
+## 4. `telemetry` service — implemented 2026-10-17
+
+```
+ px4-sim (PX4 + Gazebo)                          telemetry (same network namespace)
+   PX4 uxrce_dds_client ── udp 127.0.0.1:8888 ──► MicroXRCEAgent ──► ROS 2 /fmu/out/*, /uav_i/fmu/out/*
+   Gazebo gz-transport (GZ_PARTITION) ──────────► ros_gz_bridge  ──► /uav_i/gz/*, /uav_i/camera/*
+                                                  ground_truth.py ─► /uav_i/gz/ground_truth
+                                                  web_video_server :8083   camera in the browser
+                                                  foxglove_bridge  :8765   all topics (plots, map, images)
+                                                  ros2 bag (RECORD=1)      data/bags/<date>  (mcap)
+```
+
+- Files: `docker/telemetry/Dockerfile` (ROS 2 Jazzy, `ros_gz_bridge`, `web_video_server`, `foxglove_bridge`,
+  `rosbag2_storage_mcap`, Micro XRCE-DDS Agent v2.4.3 from source, `px4_msgs` built from PX4-Autopilot `msg/`
+  at `PX4_REF`), `docker/telemetry/entrypoint.sh` (also used natively by `scripts/run_telemetry_native.sh`).
+- **No px4-sim rebuild:** px4-sim only gets env (`GZ_PARTITION`, `ROS_DOMAIN_ID`, `PX4_VIDEO_HOST_IP`).
+- Network: PX4's uXRCE client sends to `127.0.0.1:8888` → telemetry must share px4-sim's network:
+  `network_mode: host` on the VM, `network_mode: service:px4-sim` locally (ports 8083 / 8765 are published
+  on px4-sim). Gazebo transport needs the same `GZ_PARTITION` in both (default partition = hostname:user).
+- `px4_msgs` must match the PX4 firmware. Build with `--build-arg PX4_REF=$(docker exec px4-sim git -C /px4 rev-parse HEAD)`
+  (default `main`).
+- Agent v2.4.3 brings its own Fast-DDS 2.14 / Fast-CDR in `/usr/local/lib`, same sonames as ROS Jazzy's →
+  entrypoint starts it with `LD_LIBRARY_PATH=/usr/local/lib`.
+
+ROS 2 topics (drone `i`; bridges are **lazy** — Gazebo is only read while someone subscribes):
+
+| Topic | Type | From |
+| :--- | :--- | :--- |
+| `/fmu/out/*` (drone 0), `/uav_i/fmu/out/*` | `px4_msgs/msg/*` | PX4 uORB (§1 B): battery, GPS, attitude, odometry, status, ... |
+| `/uav_i/gz/imu` | `sensor_msgs/Imu` | Gazebo IMU 250 Hz |
+| `/uav_i/gz/navsat` | `sensor_msgs/NavSatFix` | Gazebo GPS 30 Hz |
+| `/uav_i/gz/air_pressure` | `sensor_msgs/FluidPressure` | barometer 50 Hz |
+| `/uav_i/gz/magnetometer` | `sensor_msgs/MagneticField` | magnetometer 100 Hz |
+| `/uav_i/gz/ground_truth` | `geometry_msgs/PoseStamped` | `ground_truth.py`: `/world/<w>/dynamic_pose/info` filtered by model name `<model>_i`, frame `world` (ENU), sim time, `GT_RATE` Hz |
+| `/clock` | `rosgraph_msgs/Clock` | sim time |
+| `/uav_i/camera/image_raw`, `/uav_i/camera/camera_info` | `sensor_msgs/Image`, `CameraInfo` | camera models only |
+
+Camera sensor per model (`GZ_CAMERA="<link>/<sensor>"`, derived from `PX4_SIM_MODEL`, `none` = off):
+`gz_x500_mono_cam`, `gz_x500_mono_cam_down`, `gz_x500_gimbal` → `camera_link/camera`;
+`gz_x500_depth` → `camera_link/IMX214`. Gazebo topic: `/world/<w>/model/<model>_<i>/link/<link>/sensor/<sensor>/image`
+(the camera includes are `merge='true'`, so the link belongs to the drone model).
+
+Use it:
+
+```bash
+# camera in the browser (list of all image topics on the index page)
+http://<VM_IP>:8083/                                     # local: http://localhost:8083/
+http://<VM_IP>:8083/stream?topic=/uav_0/camera/image_raw
+
+# every topic: Foxglove (https://app.foxglove.dev or desktop app) → Open connection → ws://<VM_IP>:8765
+#   panels: Plot (/fmu/out/battery_status_v1.remaining), Map (/uav_0/gz/navsat), Image (/uav_0/camera/image_raw), Raw Messages
+
+# ROS 2 CLI on the server
+docker exec telemetry with-ros ros2 topic list
+docker exec telemetry with-ros ros2 topic echo --once /fmu/out/battery_status_v1
+docker exec telemetry with-ros ros2 topic hz /uav_0/gz/imu
+
+# record an experiment: RECORD=1 in .env → up -d --force-recreate telemetry → data/bags/<date>/*.mcap
+```
+
+| Env (telemetry) | Default | Meaning |
+| :--- | :--- | :--- |
+| `PX4_NUM_DRONES` / `PX4_GZ_WORLD` / `PX4_SIM_MODEL` | as px4-sim | topic names |
+| `GZ_PARTITION` / `ROS_DOMAIN_ID` | `aquarius` / `0` | must equal px4-sim |
+| `GZ_CAMERA` | from model | camera `<link>/<sensor>`, `none` = no camera bridge |
+| `WEB_VIDEO_PORT` / `FOXGLOVE_PORT` | `8083` / `8765` | empty = off |
+| `GT_RATE` | `30` | Hz of `/uav_i/gz/ground_truth` (empty = off) |
+| `RECORD` / `RECORD_REGEX` | – / PX4 + gz topics, no images | `1` = `ros2 bag record -s mcap` to `/data/bags` |
+
+Notes:
+- ROS 2 topics on the VM are also visible on the LAN (host network, DDS multicast, same `ROS_DOMAIN_ID`) —
+  that is T3 without discovery server, only if multicast passes between VM and control computer.
+- **Camera size / rate:** px4-sim sets the camera models to `CAMERA_WIDTH`x`CAMERA_HEIGHT` @ `CAMERA_RATE`
+  (default 640x480 @ 10 Hz). Without GPU, the model default 1280x960 @ 30 Hz made Baylands run at RTF 0.025
+  (lockstep waits for each CPU-rendered frame); 640x480 @ 10 Hz → RTF 1.0 (measured 2026-10-17).
+  The gimbal camera is 16:9 by default — set `CAMERA_HEIGHT=360` to keep its aspect.
+- A camera costs CPU twice when someone watches: Gazebo renders it, GstCameraSystem always encodes
+  H.264 (C1), the bridge converts only while subscribed. Try 1 drone first.
+- Local: if px4-sim is recreated / restarted, `docker compose -f compose.local.yml restart telemetry`
+  (a `service:` network namespace is not re-joined automatically).

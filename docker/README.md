@@ -15,6 +15,9 @@ docker/
 ├── px4-sim/
 │   ├── Dockerfile               Ubuntu 24.04 + Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
 │   └── entrypoint.sh            starts N PX4 instances, MAVLink links → CONTROL_HOST
+├── telemetry/
+│   ├── Dockerfile               ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video / foxglove
+│   └── entrypoint.sh            telemetry topics + camera view (also run natively by scripts/run_telemetry_native.sh)
 └── drone-control/
     ├── Dockerfile               Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK + Drone-Control/*.py
     ├── entrypoint.sh            sources ROS 2, runs $AUTO_RUN once (e.g. MCPP flight), then idles
@@ -26,7 +29,11 @@ Images (set by `REGISTRY` / `TAG` in `.env`):
 | Image | Built from | Used by |
 | :--- | :--- | :--- |
 | `ghcr.io/zflukz/aquarius-px4-sim:latest` | `px4-sim/` | `compose.local.yml`, `compose.server.yml` |
+| `ghcr.io/zflukz/aquarius-telemetry:latest` | `telemetry/` | `compose.local.yml`, `compose.server.yml` |
 | `ghcr.io/zflukz/aquarius-drone-control:latest` | `drone-control/` + `../Drone-Control/` | `compose.local.yml`, `compose.control.yml` |
+
+> Shortcut: `scripts/aquarius init [local|server|control]`, `aquarius start mission LAT,LON ...`,
+> `aquarius status` / `rtl` / `land` — guide: [`../AQUARIUS_CLI.md`](../AQUARIUS_CLI.md).
 
 ## The three modes
 
@@ -56,6 +63,8 @@ docker compose -f compose.local.yml logs -f px4-sim      # wait for "Ready for t
 
 - Gazebo view: <http://localhost:8080/vnc.html>
 - QGroundControl view: <http://localhost:8082/vnc.html> (`QGC=1`)
+- Drone camera: <http://localhost:8083/> (camera model only), all telemetry topics in Foxglove: `ws://localhost:8765`
+  (see [Telemetry & camera view](#telemetry--camera-view))
 - Run the control scripts inside `drone-control`:
 
 ```bash
@@ -89,12 +98,14 @@ Build and push. These are the same images you just tested locally:
 
 ```bash
 cd docker
+# telemetry: px4_msgs must match px4-sim's PX4 commit (Git Bash: prefix MSYS_NO_PATHCONV=1)
+export PX4_REF=$(docker run --rm --entrypoint git ghcr.io/zflukz/aquarius-px4-sim -C /px4 rev-parse HEAD)
 docker compose -f compose.local.yml build
-docker compose -f compose.local.yml push px4-sim drone-control
+docker compose -f compose.local.yml push px4-sim telemetry drone-control
 
 # versioned release (keep latest too)
 TAG=v0.2 docker compose -f compose.local.yml build
-TAG=v0.2 docker compose -f compose.local.yml push px4-sim drone-control
+TAG=v0.2 docker compose -f compose.local.yml push px4-sim telemetry drone-control
 ```
 
 > `aquarius-px4-sim` is large (PX4 build + Gazebo + Baylands, several GB). The first push takes a while;
@@ -147,9 +158,12 @@ sudo ufw allow from <CONTROL_IP> to any port 14640:14649 proto udp
 sudo ufw allow from <CONTROL_IP> to any port 18640:18649 proto udp
 sudo ufw allow from <CONTROL_IP> to any port 8081 proto tcp     # noVNC Gazebo
 sudo ufw allow from <CONTROL_IP> to any port 8082 proto tcp     # noVNC QGroundControl
+sudo ufw allow from <CONTROL_IP> to any port 8083 proto tcp     # drone camera (web_video_server)
+sudo ufw allow from <CONTROL_IP> to any port 8765 proto tcp     # Foxglove (all telemetry topics)
 ```
 
-> noVNC / x11vnc have **no password**. Keep ports 8081 / 8082 limited to your LAN / VPN.
+> noVNC / x11vnc / web_video_server / foxglove_bridge have **no password**. Keep ports 8081-8083 / 8765
+> limited to your LAN / VPN.
 
 ### Control computer
 
@@ -295,7 +309,7 @@ The control side only **listens** (`udpin://0.0.0.0:14540+i`), so it never needs
 | `CONTROL_HOST` | – | control computer IP / hostname (resolved once at start) |
 | `PX4_NUM_DRONES` | `1` | number of PX4 instances |
 | `PX4_GZ_WORLD` | `baylands` | Gazebo world (`default` for a light, flat world) |
-| `PX4_SIM_MODEL` / `PX4_SYS_AUTOSTART` | `gz_x500` / `4001` | vehicle (`gz_x500_depth` / `4002` for camera) |
+| `PX4_SIM_MODEL` / `PX4_SYS_AUTOSTART` | `gz_x500` / `4001` | vehicle (`gz_x500_mono_cam_down` / `4014` for a camera) |
 | `DRONE_SPACING` | `3` | metres between spawned drones |
 | `HEADLESS` | – | `1` = no Gazebo GUI |
 | `QGC` | `1` | `1` = QGroundControl runs next to Gazebo in noVNC, `0` = off |
@@ -303,6 +317,9 @@ The control side only **listens** (`udpin://0.0.0.0:14540+i`), so it never needs
 | `VNC_LISTEN` | `0.0.0.0` | x11vnc bind (`127.0.0.1` on the VM) |
 | `GZ_FOLLOW` | `0` | Gazebo camera follows drone N (same place as QGC's map); empty = free camera |
 | `PX4_GZ_FOLLOW_OFFSET_X/Y/Z` | `-8` / `-8` / `5` | camera offset from that drone, m (east / north / up) |
+| `GZ_PARTITION` / `ROS_DOMAIN_ID` | `aquarius` / `0` | shared with `telemetry` (Gazebo transport / uXRCE-DDS) |
+| `PX4_VIDEO_HOST_IP` | `127.0.0.1` | camera models: RTP/H.264 target, udp `5600+i` |
+| `CAMERA_WIDTH` / `CAMERA_HEIGHT` / `CAMERA_RATE` | `640` / `480` / `10` | camera models' image size / Hz (empty = model default, 1280x960 @ 30 → RTF ~0.03 without GPU) |
 
 > Gazebo and QGC show the same place: the drone's GPS comes from the world's `<spherical_coordinates>`
 > (Baylands: 37.4122, -121.9989), so QGC's map = Gazebo's world. Don't set PX4's `PX4_HOME_LAT/LON/ALT`
@@ -327,6 +344,44 @@ Changing these needs no rebuild. Edit `.env`, then
   `/var/log/px4/qgc.log`. If you close its window, restart it with
   `docker compose -f <file> restart px4-sim`. The "not running latest stable firmware" popup is
   normal for SITL (reports version 0.0.0).
+
+### telemetry
+Server-side telemetry topics + drone camera view. Full topic list, notes: [`telemetry_plan.md` §4](telemetry_plan.md).
+
+- Runs in px4-sim's network (`network_mode: host` on the VM, `service:px4-sim` locally): PX4's
+  uXRCE-DDS client sends to `127.0.0.1:8888`, Gazebo transport discovery needs the same host + `GZ_PARTITION`.
+- Starts: `MicroXRCEAgent` (PX4 uORB → ROS 2 `/fmu/out/*`, `/uav_i/fmu/out/*`), `ros_gz_bridge` (Gazebo
+  → `/uav_i/gz/{imu,navsat,air_pressure,magnetometer}`, `/clock`, camera
+  `/uav_i/camera/image_raw`), `ground_truth.py` (true pose `/uav_i/gz/ground_truth`), `web_video_server`,
+  `foxglove_bridge`, optional `ros2 bag record`.
+  Exits if one of them dies → Docker restarts it.
+- The drone camera needs a camera model: `PX4_SIM_MODEL=gz_x500_mono_cam_down` + `PX4_SYS_AUTOSTART=4014`
+  (down, mapping) / `gz_x500_mono_cam` + `4010` (forward) / `gz_x500_gimbal` + `4019`, then
+  `up -d --force-recreate px4-sim telemetry`.
+
+| View | Local | VM |
+| :--- | :--- | :--- |
+| Drone camera (MJPEG, every image topic listed) | <http://localhost:8083/> | `http://<VM_IP>:8083/` |
+| One camera | `…:8083/stream?topic=/uav_0/camera/image_raw` | |
+| All topics: plots, map, images | Foxglove → `ws://localhost:8765` | `ws://<VM_IP>:8765` |
+| ROS 2 CLI | `docker exec telemetry with-ros ros2 topic list` | same |
+| Recording (`RECORD=1`) | `docker/data/bags/<date>/` | `~/aquarius/data/bags/<date>/` |
+
+| Env | Default | Meaning |
+| :--- | :--- | :--- |
+| `PX4_NUM_DRONES` / `PX4_GZ_WORLD` / `PX4_SIM_MODEL` | as px4-sim | used to build the topic names |
+| `GZ_PARTITION` | `aquarius` | Gazebo transport partition — also set on px4-sim |
+| `ROS_DOMAIN_ID` | `0` | ROS 2 / uXRCE-DDS domain — also set on px4-sim |
+| `GZ_CAMERA` | from model | camera `<link>/<sensor>` (`camera_link/camera`), `none` = no camera |
+| `WEB_VIDEO_PORT` / `FOXGLOVE_PORT` | `8083` / `8765` | empty = off |
+| `GT_RATE` | `30` | Hz of `/uav_i/gz/ground_truth` (empty = off) |
+| `RECORD` / `RECORD_REGEX` | – / PX4 + gz topics | `1` = `ros2 bag record` (mcap); add `/uav_[0-9]+/camera/image_raw` for video (large) |
+
+px4-sim's camera models also stream RTP/H.264 to `PX4_VIDEO_HOST_IP:5600+i` (PX4 GstCameraSystem, default
+`127.0.0.1` = QGC in noVNC: Application Settings → Video → UDP h.264, port 5600) — not tested yet.
+
+> Local: when px4-sim is recreated or restarted, also `docker compose -f compose.local.yml restart telemetry`
+> (a container in `service:px4-sim` network mode does not re-join the new namespace by itself).
 
 ### drone-control
 - Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK, with `Drone-Control/` copied in at build time
@@ -362,15 +417,21 @@ If it stays well below 1.0, run fewer drones, switch to `PX4_GZ_WORLD=default`, 
 - ROS 2 per drone: one `MicroXRCEAgent udp4 -p 8888` on the VM. Every PX4 instance publishes under
   its own namespace (drone 0: `/fmu/...`, drone i: `/uav_i/fmu/...`). Use the same `ROS_DOMAIN_ID` on
   both machines. Details: `telemetry_plan.md`.
-- Camera: add `ros_gz_bridge` to the VM side (it has to run where Gazebo runs) and consume the ROS 2
-  image topic with `view_cam.py` on the control computer.
+- Camera: ✅ `telemetry` service (`ros_gz_bridge` on the VM, browser view on 8083). `view_cam.py`
+  (`/uav_<DRONE_ID>/camera/image_raw`) on the control computer additionally needs DDS between the machines (T3).
 - CI: a GitHub Actions job that builds and pushes both images on every push to `main`, so the VM
   only needs `pull`.
+
+### Communication plan
+
+MAVLink → MQTT → Telegraf / InfluxDB / Grafana for live dashboards + history, Kafka only when needed, control and
+video kept off the broker: **[`communication_plan.md`](communication_plan.md)** (phases M1–M6).
 
 ### Telemetry & camera plan
 
 All sensors / battery / state + the drone camera to the server: **[`telemetry_plan.md`](telemetry_plan.md)**
-(full list of telemetry available in Gazebo / PX4 / MAVLink / MAVSDK, steps T1–T5, camera C1–C4).
+(full list of telemetry available in Gazebo / PX4 / MAVLink / MAVSDK, steps T1–T5, camera C1–C4;
+§4 = the implemented `telemetry` service).
 
 ### Phase 3 — scale out (one container per drone / several VMs)
 ```

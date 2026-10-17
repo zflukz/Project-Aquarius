@@ -14,6 +14,12 @@
 # Env (defaults): CONTROL_HOST (empty = PX4 defaults, localhost only)  PX4_NUM_DRONES=1
 #   PX4_GZ_WORLD=baylands  PX4_SIM_MODEL=gz_x500  PX4_SYS_AUTOSTART=4001  DRONE_SPACING=3
 #   HEADLESS (1 = no GUI)  PX4_DIR=~/PX4-Autopilot  LOG_DIR=/tmp/px4-native
+#   GZ_PARTITION=aquarius  ROS_DOMAIN_ID=0  PX4_VIDEO_HOST_IP=127.0.0.1   (as in the compose files)
+#   CAMERA_WIDTH=640 CAMERA_HEIGHT=480 CAMERA_RATE=10  camera models (edits $PX4_DIR models, original kept as
+#                                                     model.sdf.orig); empty = model default (needs a GPU)
+#
+# Telemetry topics + camera view: start scripts/run_telemetry_native.sh in a second terminal
+# (same PX4_NUM_DRONES / PX4_GZ_WORLD / PX4_SIM_MODEL / GZ_PARTITION / ROS_DOMAIN_ID).
 set -e
 
 PX4_DIR=${PX4_DIR:-$HOME/PX4-Autopilot}
@@ -25,6 +31,10 @@ export PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
 export PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
 export PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
 export HEADLESS=${HEADLESS:-}
+# shared with the telemetry bridge (Gazebo transport partition, uXRCE-DDS domain), camera RTP target
+export GZ_PARTITION=${GZ_PARTITION:-aquarius}
+export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+export PX4_VIDEO_HOST_IP=${PX4_VIDEO_HOST_IP:-127.0.0.1}
 DRONE_SPACING=${DRONE_SPACING:-3}
 API_LOCAL_BASE=14640; API_REMOTE_BASE=14540
 GCS_LOCAL_BASE=18640; GCS_REMOTE_PORT=14550
@@ -40,6 +50,25 @@ mkdir -p "$LOG_DIR"
 pkill -9 -f "$BIN/px4" 2>/dev/null || true
 pkill -9 -f "gz sim" 2>/dev/null || true
 rm -f /tmp/px4_lock-* /tmp/px4-sock-*
+
+# drone camera size / rate — same as docker/px4-sim/entrypoint.sh (1280x960 @ 30 Hz without GPU -> RTF ~0.03)
+CAMERA_WIDTH=${CAMERA_WIDTH-640}; CAMERA_HEIGHT=${CAMERA_HEIGHT-480}; CAMERA_RATE=${CAMERA_RATE-10}
+for sdf in mono_cam gimbal OakD-Lite; do
+    f="$PX4_DIR/Tools/simulation/gz/models/$sdf/model.sdf"
+    [ -f "$f" ] || continue
+    [ -f "$f.orig" ] || cp "$f" "$f.orig"
+    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE python3 - "$f.orig" "$f" <<'PY'
+import os, re, sys
+src = open(sys.argv[1]).read()
+def fix(m):   # only <sensor type="camera"> blocks (not imu / depth_camera)
+    b = m.group(0)
+    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R')):
+        if os.environ[env]:
+            b = re.sub(rf'<{tag}>[^<]*</{tag}>', f'<{tag}>{os.environ[env]}</{tag}>', b, count=1)
+    return b
+open(sys.argv[2], 'w').write(re.sub(r'<sensor name="[^"]*" type="camera">.*?</sensor>', fix, src, flags=re.S))
+PY
+done
 
 if [ "$PX4_GZ_WORLD" = baylands ] && ! compgen -G "$FUEL_DIR/baylands/*/model.sdf" > /dev/null; then
     echo "Baylands not cached, downloading from Gazebo Fuel ..."
@@ -95,7 +124,8 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
     fi
 done
 
-echo "Running. Ctrl+C to stop."
+echo "Running (GZ_PARTITION=$GZ_PARTITION, ROS_DOMAIN_ID=$ROS_DOMAIN_ID). Ctrl+C to stop."
+echo "Telemetry / camera: bash scripts/run_telemetry_native.sh (second terminal)"
 wait -n "${PX4_PIDS[@]}"
 echo "A PX4 instance exited, shutting down"
 cleanup

@@ -1,3 +1,4 @@
+import os
 import time
 import cv2
 import rclpy
@@ -12,16 +13,21 @@ class DroneCameraViewer(Node):
         self.bridge = CvBridge()
         self.received_first_frame = False
 
-        # กำหนด QoS ดั้งเดิมที่ทำงานเข้ากับ Bridge ได้เสถียรที่สุด
+        # topic จาก telemetry container (ros_gz_bridge): /uav_<DRONE_ID>/camera/image_raw
+        # เปลี่ยนได้ด้วย CAMERA_TOPIC
+        self.topic = os.environ.get(
+            'CAMERA_TOPIC', f"/uav_{os.environ.get('DRONE_ID', '0')}/camera/image_raw")
+
+        # BEST_EFFORT รับได้ทั้ง publisher แบบ RELIABLE และ BEST_EFFORT
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
 
         self.subscription = self.create_subscription(
             Image,
-            '/camera',
+            self.topic,
             self.image_callback,
             qos
         )
@@ -29,7 +35,7 @@ class DroneCameraViewer(Node):
         self.prev_time = time.time()
         self.fps = 0.0
         self.frame_count = 0
-        self.get_logger().info("กำลังรอรับสัญญาณภาพจาก /camera...")
+        self.get_logger().info(f"กำลังรอรับสัญญาณภาพจาก {self.topic}...")
 
     def image_callback(self, msg):
         if not self.received_first_frame:

@@ -11,10 +11,11 @@ a separate computer, later real drones.
 
 | Path | What |
 | :--- | :--- |
-| `docker/` | **everything Docker / simulator** — see `docker/README.md`; telemetry + camera plan: `docker/telemetry_plan.md` |
-| `Drone-Control/` | `flight_test.py`, `teleop_drone.py`, `mcpp_mission.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
+| `docker/` | **everything Docker / simulator** — see `docker/README.md`; telemetry + camera plan: `docker/telemetry_plan.md`; MAVLink → MQTT → Grafana (+ Kafka later) plan: `docker/communication_plan.md` |
+| `Drone-Control/` | `flight_test.py`, `teleop_drone.py`, `mcpp_mission.py`, `mission_cli.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
-| `scripts/` | **native** (non-Docker) install / run / uninstall — same software + ports as the images |
+| `AQUARIUS_CLI.md` | user guide for the `aquarius` command (`scripts/aquarius`): every command, option, example, troubleshooting |
+| `scripts/` | `aquarius` CLI (init / start mission LAT,LON / coverage / status / rtl / land); **native** (non-Docker) install / run / uninstall — same software + ports as the images |
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |
 | `Robomaster-TT/`, `InfoData/` | side experiments / Obsidian notes |
 
@@ -31,12 +32,12 @@ a separate computer, later real drones.
 
 ## Architecture (Docker)
 
-Three modes, same two images (`ghcr.io/zflukz/aquarius-px4-sim`, `ghcr.io/zflukz/aquarius-drone-control`):
+Three modes, same three images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-drone-control`):
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + drone-control on one bridge network; also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082), `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083 / 8765, in px4-sim's netns) + drone-control on one bridge network; also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083, Foxglove 8765), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -132,7 +133,94 @@ Camera: default `gz_x500` has **no camera**. Step 0: `gz_x500_mono_cam_down` (40
 built + loaded (`server.config`) → RTP/H.264 UDP to `PX4_VIDEO_HOST_IP:5600+i` (QGC video / ffplay);
 x264/rtp/udp GStreamer plugins present. **C2** save geo-tagged frames via `gz.transport13`. **C3**
 `ros_gz_bridge` → ROS 2 Image (with T2/T3, compress). **C4** `ffmpeg x11grab :99` records the scene view.
-None of the steps is implemented yet; C1–C4 not tested.
+**Since 2026-10-17 T2, T5 (ROS topic), C3 + browser camera / Foxglove / bag are implemented** in the `telemetry` service (change log below); T1, T3, T4 DB, C1, C2, C4 still open.
+
+## Change log — telemetry service: topics + camera view on the server (2026-10-17)
+
+New service **`telemetry`** (`docker/telemetry/`, image `ghcr.io/zflukz/aquarius-telemetry`) in
+`compose.server.yml` (`network_mode: host`) and `compose.local.yml` (`network_mode: service:px4-sim`,
+ports 8083 / 8765 published on px4-sim). Implements T2, T5, C3 + browser camera, Foxglove, `ros2 bag`.
+Details / topic table: `docker/telemetry_plan.md` §4.
+
+- Dockerfile: ROS 2 Jazzy + `ros_gz_bridge` + `web_video_server` + `foxglove_bridge` + `rosbag2_storage_mcap`,
+  Micro XRCE-DDS Agent v2.4.3 from source (own Fast-DDS in `/usr/local/lib` → started with
+  `LD_LIBRARY_PATH=/usr/local/lib`), `px4_msgs` built from PX4-Autopilot `msg/` at build arg `PX4_REF`
+  (compose arg from `.env`, must be px4-sim's commit). `with-ros <cmd>` helper for `docker exec`.
+- entrypoint: agent udp 8888 (PX4 → `/fmu/out/*`, `/uav_i/fmu/out/*`), lazy `ros_gz_bridge` YAML generated
+  per drone (`/uav_i/gz/{imu,navsat,air_pressure,magnetometer}`, `/uav_i/camera/{image_raw,camera_info}`,
+  `/clock`), `ground_truth.py` (`/uav_i/gz/ground_truth`), web_video_server :8083, foxglove_bridge :8765, `RECORD=1` → mcap bag in
+  `docker/data/bags`. Exits if any part dies. Camera sensor from `PX4_SIM_MODEL` (`GZ_CAMERA` override).
+- px4-sim needs **no rebuild**: only env `GZ_PARTITION` (shared gz-transport partition), `ROS_DOMAIN_ID`
+  (rcS maps it to `UXRCE_DDS_DOM_ID`), `PX4_VIDEO_HOST_IP`.
+- Camera needs a camera model: `PX4_SIM_MODEL=gz_x500_mono_cam_down` + `PX4_SYS_AUTOSTART=4014`.
+- `view_cam.py`: topic `/uav_<DRONE_ID>/camera/image_raw` (`CAMERA_TOPIC`), QoS BEST_EFFORT.
+- Native twin: `scripts/install_telemetry_server.sh` (same stack, `px4_msgs` from `$PX4_DIR/msg`) +
+  `scripts/run_telemetry_native.sh` (runs `docker/telemetry/entrypoint.sh` with native paths);
+  `run_sim_native.sh` exports the same env; `uninstall_sim_server.sh` removes the telemetry parts.
+- Checked against PX4 source in the px4-sim image: rcS `uav_$px4_instance` namespace for instance > 0,
+  `ROS_DOMAIN_ID` → `UXRCE_DDS_DOM_ID`; x500_base sensors `imu_sensor` / `navsat_sensor` /
+  `air_pressure_sensor` / `magnetometer_sensor` on `base_link`; cameras merged into the drone model:
+  mono_cam / gimbal `camera_link/camera`, OakD-Lite (depth) `camera_link/IMX214`.
+
+- **Camera size / rate (`px4-sim` entrypoint + `run_sim_native.sh`):** `CAMERA_WIDTH/HEIGHT/RATE` (default
+  640/480/10, empty = model default) rewrite the `<sensor type="camera">` blocks of `mono_cam`, `gimbal`, `OakD-Lite`
+  from `model.sdf.orig` at every start. Reason: no GPU → Gazebo renders the camera on the CPU and lockstep waits
+  for each frame; mono_cam's default 1280x960 @ 30 Hz in Baylands gave **RTF 0.025** (camera 1.5 Hz).
+- **`ground_truth.py`** (telemetry image, `gz.transport13` Python from ROS's `gz_transport_vendor`) →
+  `/uav_i/gz/ground_truth` PoseStamped. Replaces the bridged `/gz/ground_truth` TFMessage: ros_gz_bridge's
+  Pose_V → TF conversion leaves `child_frame_id` empty and mixes model + link poses (no PosePublisher /
+  OdometryPublisher on the PX4 models; `/model/<m>/odometry_with_covariance` is only a PX4 subscription).
+- `set -m` in the telemetry entrypoint: without job control, background jobs ignore SIGINT → `ros2 bag` never
+  closed the mcap (no `metadata.yaml`).
+
+Verified 2026-10-17 (`compose.local.yml`, Docker Desktop, `PX4_SIM_MODEL=gz_x500_mono_cam_down` / 4014, `QGC=0`):
+- `aquarius-telemetry` built (930 MB, ROS layer ≈ 33 min, agent ≈ 6.5 min, px4_msgs ≈ 9 min) with
+  `PX4_REF=9a1429ae…` = px4-sim's PX4. Docker Desktop printed `image ... already exists` after naming the image —
+  containerd-store quirk, image was fine. px4-sim rebuilt (entrypoint layer only).
+- XRCE session from PX4 (`client_key 0x00000001`), 31 `/fmu/out/*` topics, versioned names
+  (`battery_status_v1`, `vehicle_status_v4`, `vehicle_local_position_v1`, ...), decoded with the built `px4_msgs`.
+- Gazebo bridge: `/uav_0/gz/{imu,navsat,air_pressure,magnetometer}`, navsat 37.41217 / -121.99888 (Baylands),
+  `/uav_0/camera/image_raw` 640x480 rgb8; web_video_server 8083 index + `/snapshot` 200 (JPEG of the park grass),
+  foxglove_bridge listening on 8765 and advertising all topics (not opened in the Foxglove app yet).
+- RTF with camera: 0.025 at 1280x960@30 → **1.0** at 640x480@10 (also with `RECORD=1`; dips for a few s while
+  telemetry starts).
+- `flight_test.py` PASSED with telemetry running; during flight `vehicle_status_v4` armed / nav_state 18 (land),
+  `battery_status_v1` 0.94, `vehicle_odometry` ~68 Hz, ground truth ~23 Hz, camera ~3.4 Hz (CLI `ros2 topic hz`).
+- `RECORD=1` → `docker/data/bags/<date>/` mcap + metadata, `ros2 bag info` OK (28 s, 16 327 msgs: PX4, gz sensors,
+  ground truth).
+- Not tested: compose.server.yml on the VM (`network_mode: host`), `PX4_NUM_DRONES>1` topic names, Foxglove app in a
+  browser, QGC RTP video (C1), `view_cam.py` on the new topic, native `install_telemetry_server.sh` /
+  `run_telemetry_native.sh`, image not pushed to GHCR.
+
+## Change log — `aquarius` CLI (2026-10-17)
+
+- **`scripts/aquarius`** (bash, LF via `.gitattributes` — no `.sh` extension): `init [local|server|control]`
+  (`.env` from example, options `--drones/--world/--camera/--headless/--control-host` saved to `.env`, compose up,
+  waits for `drone<N-1> (sysid` in px4-sim log, prints URLs), `start mission LAT,LON ...`, `start coverage [LAT,LON]
+  --size WxH`, `status`, `rtl`/`stop`, `land`, `logs`, `urls`, `down`, `install` (→ `~/.local/bin`).
+  Docker if `drone-control` runs, else native `Drone-Control/.venv`.
+- Missions run **in the background** (`docker exec -d`, pid/log `/tmp/aquarius-<job>-<drone>.{pid,log}` in the
+  container) and the CLI follows with `tail --pid` → Ctrl+C never leaves a half-killed script (gotcha below).
+  `rtl`/`land`/new start first kill the job + `[m]avsdk_server.*:<port>` (bracket: `pkill -f` inside `bash -c`
+  otherwise matched its own shell → exit 143). Exit 1 unless the log ends with `=== … DONE|PASSED ===`.
+- **`Drone-Control/mission_cli.py`**: `goto LAT,LON ...` (reuses `mcpp_mission.connect/fly`: upload → takeoff →
+  mission → RTL; refuses points > `MAX_DIST` 1000 m from home), `status`, `rtl`, `land`.
+  `mcpp_mission.py`: `--center LAT,LON` / `AREA_CENTER`; `exit_clean()` stops every `mavsdk_server`
+  (`System._stop_mavsdk_server`) + `os._exit` — before, any `SystemExit` / error left the process hanging on
+  MAVSDK threads and holding udp 14540+i.
+- `compose.local/control.yml`: drone-control `init: true` — PID 1 is `sleep infinity`, exited `mavsdk_server`s stayed zombies.
+
+Verified (local, Baylands, `gz_x500_mono_cam_down`): `aquarius init --camera` (recreated px4-sim, ready + URLs);
+`status` (HOLD, 100 %, FIX_3D 10 sats); `start mission "{37.41245,-121.99888}" 37.41245,-121.99850 --alt 15` →
+2/2 waypoints, RTL, landed, `MISSION DONE` (2 min 54 s); `start coverage 37.41235,-121.99870 --size 30x20 --detach`
+→ 9 waypoints, `status` mid-flight, `rtl` stopped the job and the drone returned; far point (2134 m) refused,
+exit 1, no leftover process; bad args (`--drone x`, `--size 40by30`, lat 137) rejected; rebuilt drone-control
+image (`init=true`) → full mission exit 0, 0 zombies. Not tested: `init server` / `init control`, native mode,
+`--drones 2` mission/coverage, `install`.
+
+- `--max-dist M` added to the CLI (passed as `MAX_DIST`; host env vars don't reach the container). Tested: 2 km point
+  accepted with `--max-dist 5000`, then `aquarius land`.
+- User guide: **`AQUARIUS_CLI.md`** (keep it in sync when the CLI changes; `aquarius --help` = header of the script).
 
 ## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
 
@@ -299,10 +387,11 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 ## Known issues / TODO
 
 - Native path (`scripts/`) rewritten 2026-10-16; `install_sim_server.sh` (full PX4 build) not run end-to-end yet.
-- `px4-sim` image has no `ros_gz_bridge` → camera (`view_cam.py`) doesn't work in the Docker split yet
-  (default `gz_x500` has no camera at all — see `docker/telemetry_plan.md` §3).
+- Camera / telemetry topics live on the VM (`telemetry` service). `view_cam.py` on the control computer needs
+  DDS between the machines (T3, not done) — use the browser (8083) / Foxglove (8765) across networks.
+- Local: after recreating/restarting px4-sim also `restart telemetry` (`service:px4-sim` netns is not re-joined).
 - `CONTROL_HOST` is resolved once at container start; if the control computer's IP changes, recreate `px4-sim`.
-- noVNC / x11vnc have no password — keep 8081 on LAN / VPN only.
+- noVNC / x11vnc / web_video_server / foxglove_bridge have no password — keep 8081-8083 / 8765 on LAN / VPN only.
 - GHCR packages are private by default → make public or `docker login` on the VM.
 - Raw-GitHub `curl` of `compose.server.yml` works only after these files are on `main` and the repo is public.
 - `git status` shows `Visualization/Python/*` deleted — not done by Claude; confirm before committing.

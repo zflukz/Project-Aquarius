@@ -7,3 +7,5 @@ env/
 __pycache__/
 *.pyc
 .env
+# telemetry bags (docker/compose.*.yml -> ./data)
+docker/data/

@@ -1,2 +1,3 @@
 # shell scripts run inside Linux containers / VMs — never check out with CRLF
 *.sh text eol=lf
+scripts/aquarius eol=lf

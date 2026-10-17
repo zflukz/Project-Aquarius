@@ -14,7 +14,8 @@ Control computer
       ├──► Automated Flight Test  (flight_test.py,  DRONE_ID=i)
       ├──► MCPP Coverage Flight   (mcpp_mission.py, NUM_DRONES=N — auto path over the map)
       ├──► QGroundControl         (all drones on :14550)
-      └──► Camera Stream          (view_cam.py)
+      ├──► Telemetry + camera     (VM telemetry container: browser :8083, Foxglove :8765, ROS 2 topics)
+      └──► Camera window          (view_cam.py)
             │
             ▼
       Multi-drone / Swarm  →  Real Drone Deployment
@@ -23,6 +24,34 @@ Control computer
 Everything Docker / simulator related lives in **`docker/`**:
 **`docker/README.md`** covers every container, port, env var and the multi-drone plan, and
 **`docker/baylands_setup_guide.md`** covers Baylands world caching and troubleshooting.
+
+## 0. Quick start — `aquarius` command
+
+`scripts/aquarius` wraps the steps below into one command (Docker or native, detected automatically).
+Full guide with every option and troubleshooting: **[`AQUARIUS_CLI.md`](AQUARIUS_CLI.md)**.
+
+```bash
+bash scripts/aquarius install                 # once: ~/.local/bin/aquarius (then just "aquarius ...")
+
+aquarius init                                 # local test: start sim + views + telemetry, wait for the drones
+aquarius init --drones 2 --camera             # options are saved in docker/.env
+aquarius init server --control-host <IP>      # VM (pull + up)      aquarius init control   # control computer
+
+aquarius start mission 37.4125,-121.9985 37.4128,-121.9992        # fly waypoints (LAT,LON) -> RTL
+aquarius start mission "{37.4125,-121.9985}" --alt 30 --drone 1   # options: --alt --speed --drone --detach
+aquarius start coverage 37.4126,-121.9990 --size 40x30 --drones 2 # MCPP coverage centred on that point
+
+aquarius status          # containers + armed / mode / battery / position / GPS
+aquarius rtl | land      # return to launch / land now (stops a running mission script first)
+aquarius logs mission    # follow again (also: coverage, px4, telemetry)
+aquarius urls | down
+```
+
+- The mission is uploaded to PX4 (QGC shows it). Then: takeoff to `--alt` (default 20 m), waypoints in order,
+  RTL, land. Points further than 1000 m from home are refused (`MAX_DIST`).
+- It runs in the background inside drone-control, so **Ctrl+C only stops following the log**. The drone keeps
+  flying until `aquarius rtl` / `land`.
+- Baylands home is about `37.4122,-121.9989`; 0.0001° lat ≈ 11 m.
 
 ---
 
@@ -45,9 +74,10 @@ cp .env.example .env                       # first time only
 docker compose -f compose.local.yml up -d --build
 docker compose -f compose.local.yml logs -f px4-sim     # wait for "Ready for takeoff!"
 # Gazebo view: http://localhost:8080/vnc.html   QGroundControl view: http://localhost:8082/vnc.html
+# Drone camera: http://localhost:8083/           all telemetry: Foxglove ws://localhost:8765   (section 4)
 ```
 
-`px4-sim`, `novnc` and `drone-control` all run on your computer. MAVLink takes the same path as in
+`px4-sim`, `novnc`, `telemetry` and `drone-control` all run on your computer. MAVLink takes the same path as in
 the split setup, so a passing local test is a good check before you deploy.
 
 ### 1b. Publish images (from your computer)
@@ -56,10 +86,10 @@ the split setup, so a passing local test is a good check before you deploy.
 echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin   # once, token with write:packages
 cd docker
 docker compose -f compose.local.yml build
-docker compose -f compose.local.yml push px4-sim drone-control
+docker compose -f compose.local.yml push px4-sim telemetry drone-control
 ```
 
-Images: `ghcr.io/zflukz/aquarius-px4-sim` and `ghcr.io/zflukz/aquarius-drone-control`
+Images: `ghcr.io/zflukz/aquarius-px4-sim`, `ghcr.io/zflukz/aquarius-telemetry` and `ghcr.io/zflukz/aquarius-drone-control`
 (`REGISTRY` / `TAG` in `docker/.env`). Make the packages public on GitHub, or `docker login` on the VM.
 
 ### 1c. Split — VM server (pull only) + control computer
@@ -94,8 +124,9 @@ cd docker
 docker compose -f compose.control.yml up -d          # pulls drone-control (or add --build)
 ```
 
-Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp` and `8081-8082/tcp` from the control computer.
-The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`.
+Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8081-8083/tcp` and `8765/tcp` from the control computer.
+The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`,
+drone camera: `http://<VM_IP>:8083/`, Foxglove: `ws://<VM_IP>:8765` (section 4).
 
 ### 1d. Native install — no Docker
 
@@ -106,6 +137,10 @@ ROS 2 Jazzy). Docker stays the main path; native is for running without Docker a
 # VM server: Gazebo Harmonic (apt) + PX4 built + Baylands cache (~30-60 min)
 bash scripts/install_sim_server.sh
 CONTROL_HOST=<CONTROL_COMPUTER_IP> PX4_NUM_DRONES=1 HEADLESS=1 bash scripts/run_sim_native.sh   # Ctrl+C stops
+
+# optional: telemetry topics + camera view (ROS 2 Jazzy, XRCE agent, px4_msgs) — second terminal
+bash scripts/install_telemetry_server.sh
+PX4_NUM_DRONES=1 bash scripts/run_telemetry_native.sh
 
 # control computer: ROS 2 (Jazzy on 24.04, Humble on 22.04) + mavsdk-grpc in Drone-Control/.venv
 bash scripts/install_control_computer.sh
@@ -129,7 +164,7 @@ With Docker the sim starts automatically with `up -d`. Configure it in `.env`
 | :--- | :--- | :--- |
 | `PX4_NUM_DRONES` | `3` | 3 drones, 3 m apart, MAV_SYS_ID 1..3 |
 | `PX4_GZ_WORLD` | `baylands` / `default` | 3D terrain / light flat world |
-| `PX4_SIM_MODEL` + `PX4_SYS_AUTOSTART` | `gz_x500_depth` + `4002` | drone with depth camera |
+| `PX4_SIM_MODEL` + `PX4_SYS_AUTOSTART` | `gz_x500_mono_cam_down` + `4014` | drone with a downward camera (section 4) |
 | `HEADLESS` | `1` | no Gazebo GUI (saves CPU on the VM) |
 
 Apply changes (no rebuild needed):
@@ -236,32 +271,58 @@ Running the scripts natively instead of in Docker works the same way:
 
 ---
 
-## 4. Camera Stream
+## 4. Telemetry & Camera View (server side)
 
-Requires `PX4_SIM_MODEL=gz_x500_depth`, `PX4_SYS_AUTOSTART=4002` (section 2).
+The **`telemetry`** container runs next to px4-sim (in `compose.server.yml` and `compose.local.yml`,
+started by `up -d`). It turns every drone's data into ROS 2 topics and serves the drone camera to the
+browser. Details and the full topic list: `docker/telemetry_plan.md` §4.
 
-The Gazebo image topic lives where Gazebo runs, so the bridge runs **on the sim machine**:
-
-```bash
-gz topic -l                         # find the camera topic, e.g. /camera
-
-source /opt/ros/jazzy/setup.bash
-ros2 run ros_gz_bridge parameter_bridge \
-  '/camera@sensor_msgs/msg/Image@gz.msgs.Image' \
-  --ros-args -r '/camera:=/camera'
-```
-
-Then view it on a machine on the same ROS 2 network (same `ROS_DOMAIN_ID`):
+**1. Put a camera on the drones** (default `gz_x500` has none). In `.env`:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-python3 Drone-Control/view_cam.py
+PX4_SIM_MODEL=gz_x500_mono_cam_down     # camera looking down (coverage / mapping)
+PX4_SYS_AUTOSTART=4014                  # forward: gz_x500_mono_cam + 4010, gimbal: gz_x500_gimbal + 4019
 ```
 
-> If `view_cam.py` waits forever, change QoS in the file from `ReliabilityPolicy.RELIABLE` → `ReliabilityPolicy.BEST_EFFORT`.
->
-> The `px4-sim` image does not include `ros_gz_bridge` yet. A camera bridge on the VM server is
-> planned (`docker/README.md`, Future plan Phase 2). Until then, use the native setup (1d) for camera work.
+```bash
+docker compose -f compose.server.yml up -d --force-recreate px4-sim telemetry    # VM
+docker compose -f compose.local.yml  up -d --force-recreate px4-sim telemetry    # local test (in docker/)
+```
+
+The camera is set to 640x480 @ 10 Hz (`CAMERA_WIDTH/HEIGHT/RATE` in `.env`) — bigger images without a GPU
+slow the whole simulation down (RTF 0.03 at the model's default 1280x960 @ 30 Hz).
+
+**2. Watch / read it:**
+
+| What | Local test | VM server |
+| :--- | :--- | :--- |
+| Drone camera in the browser | <http://localhost:8083/> | `http://<VM_IP>:8083/` |
+| One camera stream | `http://localhost:8083/stream?topic=/uav_0/camera/image_raw` | same with `<VM_IP>` |
+| All telemetry (plots, map, images) | [Foxglove](https://app.foxglove.dev) → Open connection → `ws://localhost:8765` | `ws://<VM_IP>:8765` |
+| Topic list / values | `docker exec telemetry with-ros ros2 topic list` | same, on the VM |
+
+Main topics (drone `i`): `/fmu/out/*` (drone 0) and `/uav_i/fmu/out/*` — PX4 battery, GPS, attitude,
+odometry, vehicle status (versioned names like `vehicle_status_v4`); `/uav_i/gz/{imu,navsat,air_pressure,magnetometer}`
+— raw Gazebo sensors; `/uav_i/gz/ground_truth` — true pose of each drone; `/uav_i/camera/image_raw`.
+
+```bash
+docker exec telemetry with-ros ros2 topic echo --once /fmu/out/battery_status_v1
+docker exec telemetry with-ros ros2 topic hz /uav_0/camera/image_raw
+```
+
+**3. Record an experiment:** `RECORD=1` in `.env`, then `up -d --force-recreate telemetry` → `ros2 bag`
+(mcap) in `docker/data/bags/` (VM: `~/aquarius/data/bags/`). Open it in Foxglove or `ros2 bag play`.
+
+**4. Other ways to the camera:**
+
+- QGroundControl video: PX4 streams RTP/H.264 to `PX4_VIDEO_HOST_IP:5600+i` (default `127.0.0.1` = QGC
+  in noVNC; set the control computer IP to view it there). QGC → Application Settings → Video → UDP h.264, port 5600.
+- `view_cam.py` (OpenCV window) subscribes `/uav_<DRONE_ID>/camera/image_raw` (or `CAMERA_TOPIC`). It works
+  on the VM or on a computer that sees the VM's ROS 2 topics (same LAN + `ROS_DOMAIN_ID`, DDS multicast).
+  Across networks use the browser / Foxglove views above.
+
+> Native (no Docker): `bash scripts/install_telemetry_server.sh` once, then `bash scripts/run_telemetry_native.sh`
+> next to `run_sim_native.sh` (same env) — same topics and ports.
 
 ---
 
@@ -274,25 +335,33 @@ Project-Aquarius/
 │   ├── baylands_setup_guide.md     Baylands world: pre-cache + troubleshooting
 │   ├── .env.example                REGISTRY, CONTROL_HOST, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, ...
 │   ├── compose.local.yml           local test: all containers on your computer (+ build & push)
-│   ├── compose.server.yml          VM server: pull image only
+│   ├── compose.server.yml          VM server: pull image only (px4-sim, noVNC, telemetry)
+│   ├── telemetry_plan.md           telemetry / camera: what exists, plan, telemetry service (§4)
 │   ├── compose.control.yml         control computer: drone-control
 │   ├── px4-sim/
 │   │   ├── Dockerfile              Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
 │   │   └── entrypoint.sh           starts N PX4 instances, MAVLink links → CONTROL_HOST
+│   ├── telemetry/
+│   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video / foxglove
+│   │   └── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, Foxglove :8765, ros2 bag
 │   └── drone-control/
 │       ├── Dockerfile              ROS 2 Jazzy + MAVSDK + Drone-Control/
 │       ├── entrypoint.sh           sources ROS 2, runs $AUTO_RUN once (e.g. mcpp_mission.py)
 │       └── Dockerfile.dockerignore
 ├── scripts/
+│   ├── aquarius                    CLI: init / start mission LAT,LON / start coverage / status / rtl / land
 │   ├── install_sim_server.sh       native VM server install (Gazebo apt + PX4 built + Baylands)
 │   ├── run_sim_native.sh           native twin of px4-sim/entrypoint.sh (N drones, same ports)
+│   ├── install_telemetry_server.sh native telemetry stack (ROS 2 + XRCE agent + px4_msgs from PX4)
+│   ├── run_telemetry_native.sh     native twin of the telemetry container
 │   ├── install_control_computer.sh native control computer install (ROS 2 + mavsdk-grpc venv)
 │   └── uninstall_*.sh              remove the native installs
 └── Drone-Control/
     ├── teleop_drone.py             keyboard controller → PX4 via MAVSDK (DRONE_ID)
     ├── flight_test.py              automated flight test (arm/takeoff/move/land, DRONE_ID)
-    ├── mcpp_mission.py             MCPP coverage path → PX4 mission, 1..N drones (NUM_DRONES)
-    └── view_cam.py                 ROS 2 subscriber → OpenCV camera window
+    ├── mcpp_mission.py             MCPP coverage path → PX4 mission, 1..N drones (NUM_DRONES, --center LAT,LON)
+    ├── mission_cli.py              goto LAT,LON ... / status / rtl / land (used by scripts/aquarius)
+    └── view_cam.py                 ROS 2 subscriber (/uav_<DRONE_ID>/camera/image_raw) → OpenCV window
 ```
 
 ---
@@ -305,7 +374,8 @@ teleop_drone.py ─┐                                  ┌─► PX4 instance 0
 flight_test.py  ─┤                                  │
 mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
 QGroundControl  ◄────────────── udp 14550 ──────────┘   ...             ─┘
-view_cam.py ──► rclpy ◄── ROS 2 DDS ◄── ros_gz_bridge ◄── Gazebo /camera (gz_x500_depth)
+browser :8083 / Foxglove :8765 ◄── telemetry ◄── XRCE agent ◄── PX4 uORB   (VM, same network as px4-sim)
+view_cam.py ──► ROS 2 DDS  ◄──────┘          ◄── ros_gz_bridge ◄── Gazebo sensors + camera (gz_x500_mono_cam_down)
 ```
 
 ---
@@ -316,7 +386,7 @@ view_cam.py ──► rclpy ◄── ROS 2 DDS ◄── ros_gz_bridge ◄─�
 See `docker/README.md` (Future plan):
 1. **Now:** `PX4_NUM_DRONES=N` in one container (up to 10 with the default port ranges).
 2. **Next:** a swarm script (one MAVSDK `System()` per drone with `asyncio.gather`),
-   per-drone ROS 2 topics via a single MicroXRCE-DDS agent, and the camera bridge on the VM.
+   DDS between VM and control computer (telemetry topics + camera are on the VM since 2026-10-17).
 3. **Later:** one container per drone plus a separate Gazebo server container, spread over several VMs.
 
 ### Real drone deployment

@@ -17,6 +17,8 @@
 #   VNC_LISTEN       x11vnc bind address (127.0.0.1 on the VM server)
 #   GZ_FOLLOW        drone index the Gazebo camera follows (default 0, empty = free camera)
 #   PX4_GZ_FOLLOW_OFFSET_X/Y/Z  camera offset from that drone, m (ENU world frame)
+#   CAMERA_WIDTH/HEIGHT/RATE    drone camera models (mono_cam, gimbal, OakD-Lite RGB), default 640x480 @ 10 Hz;
+#                               empty = model default (1280x960 @ 30 -> RTF ~0.03 with software rendering)
 set -e
 
 BIN=/px4/build/px4_sitl_default/bin
@@ -57,6 +59,29 @@ if [ "$PX4_GZ_WORLD" = "baylands" ] && ! compgen -G "$FUEL_DIR/baylands/*/model.
         -u "https://fuel.gazebosim.org/1.0/openrobotics/models/Baylands" \
         || echo "WARN: Baylands download failed — Gazebo may hang waiting for the world"
 fi
+
+# drone camera size / rate. Gazebo renders sensors on the CPU here (llvmpipe, no GPU) and lockstep
+# waits for every frame: mono_cam's 1280x960 @ 30 Hz in Baylands dropped RTF to ~0.03, 640x480 @ 10 Hz -> ~1.0.
+# Always edits from the original SDF (*.orig), so changing the env + restart works.
+CAMERA_WIDTH=${CAMERA_WIDTH-640}; CAMERA_HEIGHT=${CAMERA_HEIGHT-480}; CAMERA_RATE=${CAMERA_RATE-10}
+for sdf in mono_cam gimbal OakD-Lite; do
+    f=/px4/Tools/simulation/gz/models/$sdf/model.sdf
+    [ -f "$f" ] || continue
+    [ -f "$f.orig" ] || cp "$f" "$f.orig"
+    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE python3 - "$f.orig" "$f" <<'PY'
+import os, re, sys
+src = open(sys.argv[1]).read()
+def fix(m):   # only <sensor type="camera"> blocks (not imu / depth_camera)
+    b = m.group(0)
+    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R')):
+        if os.environ[env]:
+            b = re.sub(rf'<{tag}>[^<]*</{tag}>', f'<{tag}>{os.environ[env]}</{tag}>', b, count=1)
+    return b
+open(sys.argv[2], 'w').write(re.sub(r'<sensor name="[^"]*" type="camera">.*?</sensor>', fix, src, flags=re.S))
+PY
+done
+case "$PX4_SIM_MODEL" in *cam*|*gimbal*|*depth*)
+    echo "drone camera: ${CAMERA_WIDTH:-default}x${CAMERA_HEIGHT:-default} @ ${CAMERA_RATE:-default} Hz" ;; esac
 
 # one virtual screen + window manager + VNC server per viewer:
 #   :99  -> VNC 5900 -> noVNC "novnc"      Gazebo
