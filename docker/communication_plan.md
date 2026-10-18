@@ -4,8 +4,12 @@ How data moves between the drones (simulated now, real later), the VM server, th
 dashboards. It builds on [`telemetry_plan.md`](telemetry_plan.md), which lists what data exists and
 documents the ROS 2 `telemetry` service (§4).
 
-Status 2026-10-17: **plan only**. Nothing in §4–§6 is implemented. The ports were checked against the
-running px4-sim (`px4-rc.mavlink`). The resource numbers in §7 are estimates.
+Status 2026-10-18: **M1 + M2 implemented and tested locally** (`compose.local.yml`, 1 drone): 3rd PX4 link,
+`mavlink_mqtt.py`, Mosquitto, Telegraf, InfluxDB 2.7, Grafana 12.2 with the provisioned dashboard (details:
+[`README.md` → Dashboard](README.md#dashboard-grafana)). Foxglove removed. M3–M6 open. Differences from the plan
+below: booleans are 0/1, no per-drone MQTT last-will (one client for all drones → `bridge/online` will + 1 Hz
+`online` + Grafana's "no message for 5 s = offline"), PX4's onboard-payload link is stopped to make room
+(6-instance limit), the bridge sends a GCS heartbeat (needed for STATUSTEXT). §7 numbers are estimates.
 
 ---
 
@@ -15,13 +19,13 @@ running px4-sim (`px4-rc.mavlink`). The resource numbers in §7 are estimates.
 PX4 (px4-sim, VM)
  ├─ MAVLink 14640+i → CONTROL_HOST:14540+i ──► MAVSDK scripts (flight_test, teleop, mcpp_mission)   control + telemetry
  ├─ MAVLink 18640+i → CONTROL_HOST:14550   ──► QGroundControl                                         control + telemetry
- ├─ uXRCE-DDS → 127.0.0.1:8888 ──► telemetry container ──► ROS 2 topics ──► Foxglove :8765, ros2 bag   telemetry (VM only)
+ ├─ uXRCE-DDS → 127.0.0.1:8888 ──► telemetry container ──► ROS 2 topics ──► ros2 bag   telemetry (VM only)
  ├─ Gazebo ──► ros_gz_bridge / ground_truth.py ──► ROS 2 (/uav_i/gz/*, /uav_i/camera/image_raw)
  └─ camera ──► web_video_server :8083 (MJPEG) / GstCameraSystem RTP H.264 → PX4_VIDEO_HOST_IP:5600+i
 ```
 
 Gaps:
-- **No dashboard and no history**: Foxglove is live-only, and bags are files you have to open by hand.
+- **No dashboard and no history** (before 2026-10-18): Foxglove was live-only, and bags are files you have to open by hand.
 - **ROS 2 doesn't cross networks easily**: DDS discovery uses multicast, so VM ↔ control computer needs a discovery server or Zenoh (T3).
 - **Every consumer is a point-to-point UDP link**: adding a new consumer means adding a new PX4 MAVLink link.
 - **Real drones**: they speak MAVLink over a radio or companion computer. A ROS 2 / DDS link from a drone to the ground over WiFi or 4G is fragile.
@@ -59,7 +63,7 @@ Gaps:
 | Weight (R8) | ~350 MB (running) | Mosquitto ~10 MB | **+1–2 GB** (JVM, KRaft) and more ops work |
 
 **Decision:** MAVLink → MQTT is the telemetry backbone, and Grafana reads it through Telegraf and InfluxDB.
-ROS 2 stays for the data only it has: sim ground truth, raw sensors, camera, Foxglove and bags.
+ROS 2 stays for the data only it has: sim ground truth, raw sensors, camera and bags (Foxglove removed 2026-10-18).
 Kafka is only added when the triggers in §6 are met.
 
 ---

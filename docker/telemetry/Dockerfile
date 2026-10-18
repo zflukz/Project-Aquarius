@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 #   ros_gz_bridge    Gazebo sensors / camera -> ROS 2   (C3)
 #   ground_truth.py  true pose per drone -> /uav_i/gz/ground_truth   (T5)
 #   web_video_server camera in the browser (MJPEG)
-#   foxglove_bridge  every topic in Foxglove (plots, map, images)
+#   mavlink_mqtt.py  MAVLink telemetry of every drone -> MQTT -> Telegraf -> InfluxDB -> Grafana
 #   rosbag2 (mcap)   record an experiment (T4)
 # Runs in px4-sim's network namespace — it needs no change to the px4-sim image.
 
@@ -28,7 +28,6 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
         ros-jazzy-ros-base \
         ros-jazzy-ros-gz-bridge \
         ros-jazzy-web-video-server \
-        ros-jazzy-foxglove-bridge \
         ros-jazzy-rosbag2-storage-mcap \
         python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
@@ -75,14 +74,21 @@ ENV PX4_NUM_DRONES=1 \
     ROS_DOMAIN_ID=0 \
     XRCE_PORT=8888 \
     WEB_VIDEO_PORT=8083 \
-    FOXGLOVE_PORT=8765 \
+    MAVLINK_IN=udpin:0.0.0.0:14700 \
+    MQTT_URL=mqtt://127.0.0.1:1883 \
+    FLEET=sim \
     RECORD= \
     DATA_DIR=/data
 
-EXPOSE 8083 8765
+# mavlink_mqtt.py (MAVLink -> MQTT for Grafana). pip: noble's python3-paho-mqtt is 1.6 (no v2 API)
+RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* && \
+    pip3 install --no-cache-dir --break-system-packages "pymavlink>=2.4.40" "paho-mqtt>=2,<3"
+
+EXPOSE 8083 14700/udp
 VOLUME /data
 
 COPY ground_truth.py /ground_truth.py
+COPY mavlink_mqtt.py /mavlink_mqtt.py
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

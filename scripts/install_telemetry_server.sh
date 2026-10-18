@@ -2,7 +2,7 @@
 # install_telemetry_server.sh — NATIVE (no Docker) telemetry + camera bridge on the VM server
 #
 # Same software as docker/telemetry/Dockerfile: ROS 2 Jazzy + ros_gz_bridge + web_video_server +
-# foxglove_bridge + rosbag2 mcap, Micro XRCE-DDS Agent (source, /usr/local), px4_msgs built from the
+# rosbag2 mcap, pymavlink + paho-mqtt (mavlink_mqtt.py), Micro XRCE-DDS Agent (source, /usr/local), px4_msgs built from the
 # native PX4's own msg/ (so the messages match the firmware exactly).
 # Run after scripts/install_sim_server.sh (needs $PX4_DIR). Ubuntu 24.04 only (Jazzy).
 #
@@ -33,7 +33,9 @@ http://packages.ros.org/ros2/ubuntu noble main" | sudo tee /etc/apt/sources.list
 fi
 sudo apt-get install -y \
     ros-jazzy-ros-base ros-jazzy-ros-gz-bridge ros-jazzy-web-video-server \
-    ros-jazzy-foxglove-bridge ros-jazzy-rosbag2-storage-mcap python3-colcon-common-extensions
+    ros-jazzy-rosbag2-storage-mcap python3-colcon-common-extensions python3-pip
+# mavlink_mqtt.py (MAVLink -> MQTT -> Grafana); noble's python3-paho-mqtt is 1.6 (no v2 API)
+sudo pip3 install --break-system-packages "pymavlink>=2.4.40" "paho-mqtt>=2,<3"
 
 echo ">>> [2/3] Micro XRCE-DDS Agent $XRCE_AGENT_REF -> /usr/local"
 mkdir -p "$PX4_ROS_WS"
@@ -67,7 +69,11 @@ echo ""
 echo "=== telemetry (native) setup complete ==="
 echo "  terminal 1: bash scripts/run_sim_native.sh"
 echo "  terminal 2: bash scripts/run_telemetry_native.sh"
-echo "  camera:     http://<VM_IP>:8083/    Foxglove: ws://<VM_IP>:8765"
+echo "  camera:     http://<VM_IP>:8083/"
+echo "  dashboard:  MQTT broker + InfluxDB + Telegraf + Grafana are containers only:"
+echo "              docker compose -f docker/compose.server.yml up -d mosquitto influxdb telegraf grafana"
+echo "              -> Grafana http://<VM_IP>:3000"
 echo "Firewall (only if ufw is enabled):"
 echo "  sudo ufw allow from <CONTROL_IP> to any port 8083 proto tcp   # camera (web_video_server)"
-echo "  sudo ufw allow from <CONTROL_IP> to any port 8765 proto tcp   # Foxglove"
+echo "  sudo ufw allow from <CONTROL_IP> to any port 3000 proto tcp   # Grafana"
+echo "  sudo ufw allow from <CONTROL_IP> to any port 1883 proto tcp   # MQTT (optional)"

@@ -44,7 +44,9 @@ if [ -f "$PX4_ROS_WS/xrce_install_manifest.txt" ]; then
 fi
 rm -rf "$PX4_ROS_WS"
 # ROS 2 base stays (uninstall_control_computer.sh removes it)
+# (foxglove-bridge: older installs only)
 sudo apt-get remove --purge -y ros-jazzy-ros-gz-bridge ros-jazzy-web-video-server     ros-jazzy-foxglove-bridge ros-jazzy-rosbag2-storage-mcap 2>/dev/null || true
+sudo pip3 uninstall -y --break-system-packages pymavlink paho-mqtt 2>/dev/null || true   # mavlink_mqtt.py
 
 echo ">>> [6/6] Old Gazebo source-build dependencies"
 if [ "${1:-}" = "--purge-build-deps" ]; then

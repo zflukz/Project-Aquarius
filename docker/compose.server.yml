@@ -1,4 +1,4 @@
-# VM SERVER — PX4 SITL + Gazebo (+ noVNC viewers + telemetry / camera). Pull-only: no git clone, no build.
+# VM SERVER — PX4 SITL + Gazebo (+ noVNC viewers + telemetry / camera + Grafana dashboard). Pull-only: no git clone, no build.
 # The VM needs only this file and a .env next to it:
 #
 #   docker compose -f compose.server.yml pull
@@ -9,7 +9,10 @@
 #
 # Telemetry / camera (service telemetry, details: telemetry_plan.md):
 #   camera in the browser  http://<VM_IP>:8083/          (needs a camera model, e.g. gz_x500_mono_cam_down)
-#   all topics (Foxglove)  ws://<VM_IP>:8765
+#   dashboard (Grafana)    http://<VM_IP>:3000   (admin / GRAFANA_ADMIN_PASSWORD from .env)
+#     PX4 MAVLink -> telemetry (mavlink_mqtt.py) -> mosquitto :1883 -> telegraf -> influxdb (127.0.0.1:8086) -> grafana
+#   raw MQTT               mosquitto_sub -h <VM_IP> -t 'aquarius/#' -v
+# Needs Docker Compose >= 2.23.1 (inline `configs: content`).
 #   ROS 2 on the VM        docker exec telemetry with-ros ros2 topic list
 name: aquarius-server
 
@@ -40,6 +43,7 @@ services:
       - CAMERA_HEIGHT=${CAMERA_HEIGHT-480}
       - CAMERA_RATE=${CAMERA_RATE-10}
       - VNC_LISTEN=127.0.0.1                # VNC only reachable through noVNC
+      - TELEM=${TELEM:-1}                   # 3rd MAVLink link 14740+i -> 127.0.0.1:14700 (telemetry -> MQTT)
     volumes:
       - gz-fuel-cache:/root/.gz/fuel
     stop_grace_period: 10s
@@ -80,7 +84,8 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - GZ_CAMERA=${GZ_CAMERA-}             # camera "<link>/<sensor>", empty = from PX4_SIM_MODEL, none = off
       - WEB_VIDEO_PORT=${WEB_VIDEO_PORT:-8083}
-      - FOXGLOVE_PORT=${FOXGLOVE_PORT:-8765}
+      - MQTT_URL=${MQTT_URL-mqtt://127.0.0.1:1883}   # MAVLink -> MQTT for Grafana, empty = off
+      - FLEET=${FLEET:-sim}
       - GT_RATE=${GT_RATE-30}                # ground truth Hz (/uav_i/gz/ground_truth), empty = off
       - RECORD=${RECORD:-}                  # 1 = ros2 bag (mcap) -> data/bags/<date>
       - RECORD_REGEX=${RECORD_REGEX:-.*/fmu/out/.*|/uav_[0-9]+/gz/.*}
@@ -91,5 +96,103 @@ services:
     stop_grace_period: 10s
     restart: unless-stopped
 
+  # --- dashboard: MQTT -> Telegraf -> InfluxDB -> Grafana (communication_plan.md §4, §7), all host network
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    network_mode: host                      # MQTT 1883, WebSocket 9001 — LAN / VPN only (no auth yet)
+    configs:
+      - source: mosquitto_conf
+        target: /mosquitto/config/mosquitto.conf
+        mode: 0444
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    network_mode: host
+    environment:
+      - INFLUXD_HTTP_BIND_ADDRESS=127.0.0.1:8086   # VM only (ssh -L 8086:127.0.0.1:8086 for the UI)
+      - DOCKER_INFLUXDB_INIT_MODE=setup     # first start only (empty volume)
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:-aquarius-admin}
+      - DOCKER_INFLUXDB_INIT_ORG=aquarius
+      - DOCKER_INFLUXDB_INIT_BUCKET=aquarius
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUX_RETENTION:-30d}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  telegraf:
+    image: telegraf:1.36
+    container_name: telegraf
+    network_mode: host
+    environment:
+      - MQTT_SERVER=tcp://127.0.0.1:1883
+      - INFLUX_URL=http://127.0.0.1:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+    configs:
+      - source: telegraf_conf
+        target: /etc/telegraf/telegraf.conf
+        mode: 0444                          # telegraf runs as user telegraf
+    depends_on:
+      - mosquitto
+      - influxdb
+    restart: unless-stopped
+
+  grafana:
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-grafana:${TAG:-latest}
+    container_name: grafana
+    network_mode: host                      # dashboard: http://<VM_IP>:3000
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - INFLUX_URL=http://127.0.0.1:8086
+      - INFLUX_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
 volumes:
   gz-fuel-cache:
+  influxdb-data:                            # flight history (INFLUX_RETENTION)
+  grafana-data:
+
+# Same text in compose.local.yml — keep both in sync. $$ = literal $ (Telegraf reads the env itself).
+configs:
+  mosquitto_conf:
+    content: |
+      # no auth yet (communication_plan.md M4: passwords + ACL) — keep 1883 / 9001 on LAN / VPN
+      listener 1883
+      listener 9001
+      protocol websockets
+      allow_anonymous true
+      persistence false
+  telegraf_conf:
+    content: |
+      # MQTT aquarius/<fleet>/drone/<i>/<stream> {"t": ms, ...} -> InfluxDB measurement <stream>, tags fleet + drone
+      [agent]
+        interval = "1s"
+        flush_interval = "1s"
+        omit_hostname = true
+        skip_processors_after_aggregators = false
+      [[inputs.mqtt_consumer]]
+        servers = ["$${MQTT_SERVER}"]
+        topics = ["aquarius/+/drone/+/+"]
+        client_id = "aquarius-telegraf"
+        topic_tag = ""
+        data_format = "json"
+        json_time_key = "t"
+        json_time_format = "unix_ms"
+        json_string_fields = ["mode", "landed", "system_status", "text"]
+        [[inputs.mqtt_consumer.topic_parsing]]
+          topic = "aquarius/+/drone/+/+"
+          measurement = "_/_/_/_/measurement"
+          tags = "_/fleet/_/drone/_"
+      [[outputs.influxdb_v2]]
+        urls = ["$${INFLUX_URL}"]
+        token = "$${INFLUX_TOKEN}"
+        organization = "aquarius"
+        bucket = "aquarius"

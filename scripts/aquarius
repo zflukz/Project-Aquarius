@@ -9,7 +9,7 @@
 #   aquarius rtl | land [--drone N]      return to launch / land now (stops a running mission script first)
 #   aquarius stop [--drone N]            = rtl
 #   aquarius logs [mission|coverage|px4|telemetry] [--drone N]
-#   aquarius urls                        Gazebo / QGC / camera / Foxglove links
+#   aquarius urls                        Gazebo / QGC / camera / Grafana links
 #   aquarius down                        stop the containers
 #   aquarius install                     link this script to ~/.local/bin/aquarius
 #
@@ -216,7 +216,10 @@ cmd_urls() {
     echo "    QGC         http://$h:8082/vnc.html"
     if running telemetry; then
         echo "    camera      http://$h:8083/"
-        echo "    Foxglove    ws://$h:8765"
+    fi
+    if running grafana; then
+        # camera panel loads the MJPEG from the browser -> needs the VM address, not localhost
+        echo "    Grafana     http://$h:3000/d/aquarius-fleet?var-cam=http://$h:8083"
     fi
 }
 
@@ -242,7 +245,7 @@ cmd_start() {
 }
 
 cmd_status() {
-    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc" || true
+    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|influxdb|grafana" || true
     for j in mission coverage; do
         local p; p=$(job_pid $j)
         [ -n "$p" ] && echo "    $j running for drone $DRONE (aquarius logs $j)"

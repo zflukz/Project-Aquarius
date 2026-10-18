@@ -32,12 +32,12 @@ a separate computer, later real drones.
 
 ## Architecture (Docker)
 
-Three modes, same three images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-drone-control`):
+Three modes, same four images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-drone-control`):
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083 / 8765, in px4-sim's netns) + drone-control on one bridge network; also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083, Foxglove 8765), `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + influxdb (127.0.0.1:8086) + telegraf + grafana (3000) + drone-control on one bridge network; also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / influxdb / telegraf / grafana (3000), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -46,12 +46,14 @@ MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/
 | :--- | :--- | :--- |
 | MAVSDK / offboard | `14640+i` | `CONTROL_HOST:14540+i` |
 | QGroundControl | `18640+i` | `CONTROL_HOST:14550` |
+| Telemetry → MQTT / Grafana (`TELEM=1`) | `14740+i` | `TELEM_HOST:14700` (127.0.0.1, `mavlink_mqtt.py`) |
 
-PX4's own default links (14580+i → localhost:14540+i, 18570+i, …) still exist; ours are extra.
+PX4's own default links (14580+i → localhost:14540+i, 18570+i, 13030+i) still exist; ours are extra. PX4 allows max
+6 MAVLink instances → the entrypoint stops the default onboard-payload link (14280+i) before opening the telemetry link.
 
 `entrypoint.sh` flow: kill stale px4/gz/QGC/Xvfb + `/tmp/px4_lock-*`, X + QGC locks → ensure Baylands Fuel cache →
 Xvfb/fluxbox/x11vnc per screen (`:99`→5900 Gazebo, `:100`→5901 QGC) → for each drone `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`,
-wait until booted, add the two `mavlink start ... -t CONTROL_IP` links → `wait -n`, exit if any
+wait until booted, add the two `mavlink start ... -t CONTROL_IP` links + telemetry link (stop payload link first) → `wait -n`, exit if any
 PX4 dies (Docker restarts the container).
 
 ## Change log — Docker / simulation rework (2026-10-13)
@@ -133,7 +135,8 @@ Camera: default `gz_x500` has **no camera**. Step 0: `gz_x500_mono_cam_down` (40
 built + loaded (`server.config`) → RTP/H.264 UDP to `PX4_VIDEO_HOST_IP:5600+i` (QGC video / ffplay);
 x264/rtp/udp GStreamer plugins present. **C2** save geo-tagged frames via `gz.transport13`. **C3**
 `ros_gz_bridge` → ROS 2 Image (with T2/T3, compress). **C4** `ffmpeg x11grab :99` records the scene view.
-**Since 2026-10-17 T2, T5 (ROS topic), C3 + browser camera / Foxglove / bag are implemented** in the `telemetry` service (change log below); T1, T3, T4 DB, C1, C2, C4 still open.
+**Since 2026-10-17 T2, T5 (ROS topic), C3 + browser camera / bag are implemented** in the `telemetry` service (change log below);
+**since 2026-10-18 T1 + T4 as MAVLink → MQTT → InfluxDB → Grafana** (Foxglove removed); T3, C1, C2, C4 still open.
 
 ## Change log — telemetry service: topics + camera view on the server (2026-10-17)
 
@@ -221,6 +224,56 @@ image (`init=true`) → full mission exit 0, 0 zombies. Not tested: `init server
 - `--max-dist M` added to the CLI (passed as `MAX_DIST`; host env vars don't reach the container). Tested: 2 km point
   accepted with `--max-dist 5000`, then `aquarius land`.
 - User guide: **`AQUARIUS_CLI.md`** (keep it in sync when the CLI changes; `aquarius --help` = header of the script).
+
+## Change log — Grafana dashboard, Foxglove removed (2026-10-18)
+
+Implements `docker/communication_plan.md` M1 + M2. Details: `docker/README.md` → "Dashboard (Grafana)".
+
+- **px4-sim entrypoint** (+ `run_sim_native.sh`): 3rd MAVLink link per drone `14740+i → TELEM_HOST:14700` (`TELEM=1`,
+  `TELEM_HOST=127.0.0.1`), PX4 Normal mode, 200 kB/s. PX4 caps MAVLink at **6 instances** (4 from `px4-rc.mavlink` +
+  MAVSDK + QGC) → stop the unused onboard-payload link 14280+i first. Link failure is now a WARN, not `set -e` exit
+  (first try crash-looped px4-sim). `-m normal` is not a valid mode (Normal = no `-m`).
+- **`docker/telemetry/mavlink_mqtt.py`** (pymavlink + paho-mqtt v2, pip layer at the end of the Dockerfile — noble's
+  python3-paho-mqtt is 1.6): one `udpin:0.0.0.0:14700` socket for all drones (sysid i+1), SET_MESSAGE_INTERVAL
+  (position / attitude 10 Hz, rest 1 Hz), **1 Hz GCS heartbeat** (PX4 sends STATUSTEXT only to GCS links,
+  `streams/STATUSTEXT.hpp`), joins chunked STATUSTEXT. MQTT `aquarius/<FLEET>/drone/<i>/{online,status,position,
+  attitude,battery,gps,health,mission,event}`, JSON `{"t": ms, ...}`, booleans 0/1. Rate limit uses 0.8/rate (1/rate
+  dropped half of PX4's jittery 10 Hz). Newer pymavlink `udpin` has no `last_address` → commands via `mav.*_send`
+  (to all clients; PX4 ignores other sysids). Started by the telemetry entrypoint when `MQTT_URL` is set.
+- **Foxglove removed**: `ros-jazzy-foxglove-bridge`, `FOXGLOVE_PORT`, port 8765 (Dockerfile, entrypoint, compose,
+  `.env.example`, CLI, native install, docs). Changing the apt line invalidates the ROS layer → full telemetry rebuild.
+- New services in `compose.local.yml` / `compose.server.yml`: `mosquitto` (eclipse-mosquitto:2, anonymous, no
+  persistence), `influxdb` (2.7, setup mode, org/bucket `aquarius`, `INFLUX_RETENTION` 30d; VM binds 127.0.0.1),
+  `telegraf` (1.36, `mqtt_consumer` + `topic_parsing` → measurement = stream, tags fleet / drone, `json_time_key=t`),
+  `grafana` (new image **`aquarius-grafana`** = `grafana/grafana:12.2.0` + provisioning; VM stays pull-only).
+  Mosquitto / Telegraf configs inline (`configs: content`, Compose ≥ 2.23.1, **`mode: 0444`** — default 0400 →
+  telegraf "permission denied"); same text in both compose files.
+- **Dashboard** `docker/grafana/dashboards/aquarius.json` (uid `aquarius-fleet`, home page, Flux): stat row (link
+  online if a message < 5 s old, armed, mode, battery, altitude, sats), geomap (Esri satellite, track + last
+  position), camera (HTML `<img>` MJPEG from `${cam}` textbox variable — browser-side, so off the VM set
+  `var-cam=http://<VM_IP>:8083`), altitude / ground speed / climb, mode state timeline, mission waypoint, battery % /
+  voltage / eph, sensors / CPU / GPS fix / mission progress, events table, roll / pitch. Drone i = categorical
+  slot i (fixed order), status colors only for OK / warning / fault. Stat panels with string values need
+  `reduceOptions.fields: "/^drone /"` (matched against the display name). Unit `lengthm` auto-scales to mm → `suffix: m`.
+- CLI: `aquarius urls` prints Grafana (with `var-cam`), `status` lists the dashboard containers.
+- Native: `install_telemetry_server.sh` pip-installs pymavlink / paho, no foxglove; `run_telemetry_native.sh` sets
+  `MQTT_SCRIPT`; broker / DB / Grafana only as containers (`compose.server.yml up -d mosquitto influxdb telegraf grafana`).
+
+Verified 2026-10-18 (`compose.local.yml`, Docker Desktop, `gz_x500_mono_cam_down`, `HEADLESS=1 QGC=0`; px4-sim /
+telemetry first with the new scripts `docker cp`'d into the old images + pip in the container): PX4 log
+`udp port 14740 remote port 14700`; `mosquitto_sub` rates position / attitude 10 Hz, status / battery / gps / health /
+online 1 Hz; InfluxDB has all measurements with tags fleet=sim, drone=0; Grafana datasource health OK, all 22 panel
+queries OK via `/api/ds/query`; two `aquarius start coverage --size 30x20` flights **PASSED** with the bridge's GCS
+heartbeat on the link; headless-Chrome screenshot: every panel filled (ONLINE, LOITER, 100 %, map track over
+Baylands, camera image, mode timeline TAKEOFF/MISSION/RTL/LOITER, mission 19 / 19, events "Landing detected").
+Then `telemetry` (4.3 GB, no foxglove package, paho 2.1.0) + `px4-sim` images rebuilt (stack `down` first — the first
+build attempt was killed for low memory), `up -d` with the new images: telemetry link, MQTT streams, all panel queries OK.
+Fix: MISSION_CURRENT `total` = 65535 means no mission → sent as 0 (panel shows "-", was "1 / 65535").
+Load (6 vCPU / 7.7 GB WSL, mono_cam_down, telemetry on, RTF over 30 s): `HEADLESS=1 QGC=0` RTF 0.92, px4-sim ~180 % CPU,
+2 GB; GUI + QGC at 1920x1080 RTF 0.78, ~485 % CPU, 4.2 GB (gz GUI ~176 %, QGC ~103 %); same at `SCREEN_SIZE=1280x720x24`
+RTF 0.89, ~465 %. Both noVNC screens render (screenshots), QGC Ready / Hold. Slow sim time with GUI = CPU limit, not a bug.
+Not tested: `compose.server.yml` on the VM, `PX4_NUM_DRONES>1` (several drones on one socket), native scripts,
+real browser login flow, images not pushed.
 
 ## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
 
@@ -388,10 +441,12 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 
 - Native path (`scripts/`) rewritten 2026-10-16; `install_sim_server.sh` (full PX4 build) not run end-to-end yet.
 - Camera / telemetry topics live on the VM (`telemetry` service). `view_cam.py` on the control computer needs
-  DDS between the machines (T3, not done) — use the browser (8083) / Foxglove (8765) across networks.
+  DDS between the machines (T3, not done) — use the browser (8083) / Grafana (3000) across networks.
 - Local: after recreating/restarting px4-sim also `restart telemetry` (`service:px4-sim` netns is not re-joined).
 - `CONTROL_HOST` is resolved once at container start; if the control computer's IP changes, recreate `px4-sim`.
-- noVNC / x11vnc / web_video_server / foxglove_bridge have no password — keep 8081-8083 / 8765 on LAN / VPN only.
+- noVNC / x11vnc / web_video_server / Mosquitto have no password — keep 8081-8083 / 1883 / 9001 / 3000 on LAN / VPN only.
+  Grafana default login admin/admin and InfluxDB dev token → set `GRAFANA_ADMIN_PASSWORD` / `INFLUX_*` in `.env` on the VM
+  before the first start (only applied to empty volumes).
 - GHCR packages are private by default → make public or `docker login` on the VM.
 - Raw-GitHub `curl` of `compose.server.yml` works only after these files are on `main` and the repo is public.
 - `git status` shows `Visualization/Python/*` deleted — not done by Claude; confirm before committing.

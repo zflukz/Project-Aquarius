@@ -14,7 +14,7 @@ Control computer
       ├──► Automated Flight Test  (flight_test.py,  DRONE_ID=i)
       ├──► MCPP Coverage Flight   (mcpp_mission.py, NUM_DRONES=N — auto path over the map)
       ├──► QGroundControl         (all drones on :14550)
-      ├──► Telemetry + camera     (VM telemetry container: browser :8083, Foxglove :8765, ROS 2 topics)
+      ├──► Telemetry + camera     (VM telemetry container: camera :8083, ROS 2 topics; Grafana dashboard :3000)
       └──► Camera window          (view_cam.py)
             │
             ▼
@@ -74,7 +74,7 @@ cp .env.example .env                       # first time only
 docker compose -f compose.local.yml up -d --build
 docker compose -f compose.local.yml logs -f px4-sim     # wait for "Ready for takeoff!"
 # Gazebo view: http://localhost:8080/vnc.html   QGroundControl view: http://localhost:8082/vnc.html
-# Drone camera: http://localhost:8083/           all telemetry: Foxglove ws://localhost:8765   (section 4)
+# Dashboard: Grafana http://localhost:3000 (admin/admin)   drone camera: http://localhost:8083/   (section 4)
 ```
 
 `px4-sim`, `novnc`, `telemetry` and `drone-control` all run on your computer. MAVLink takes the same path as in
@@ -124,9 +124,9 @@ cd docker
 docker compose -f compose.control.yml up -d          # pulls drone-control (or add --build)
 ```
 
-Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8081-8083/tcp` and `8765/tcp` from the control computer.
+Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8081-8083/tcp` and `3000/tcp` (Grafana) from the control computer.
 The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`,
-drone camera: `http://<VM_IP>:8083/`, Foxglove: `ws://<VM_IP>:8765` (section 4).
+drone camera: `http://<VM_IP>:8083/`, dashboard: `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (section 4).
 
 ### 1d. Native install — no Docker
 
@@ -298,7 +298,8 @@ slow the whole simulation down (RTF 0.03 at the model's default 1280x960 @ 30 Hz
 | :--- | :--- | :--- |
 | Drone camera in the browser | <http://localhost:8083/> | `http://<VM_IP>:8083/` |
 | One camera stream | `http://localhost:8083/stream?topic=/uav_0/camera/image_raw` | same with `<VM_IP>` |
-| All telemetry (plots, map, images) | [Foxglove](https://app.foxglove.dev) → Open connection → `ws://localhost:8765` | `ws://<VM_IP>:8765` |
+| **Dashboard** (status, map + path, camera, altitude / speed / battery, modes, events, history) | Grafana <http://localhost:3000> | `http://<VM_IP>:3000` |
+| Raw MQTT telemetry | `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v` | `mosquitto_sub -h <VM_IP> -t 'aquarius/#' -v` |
 | Topic list / values | `docker exec telemetry with-ros ros2 topic list` | same, on the VM |
 
 Main topics (drone `i`): `/fmu/out/*` (drone 0) and `/uav_i/fmu/out/*` — PX4 battery, GPS, attitude,
@@ -311,7 +312,7 @@ docker exec telemetry with-ros ros2 topic hz /uav_0/camera/image_raw
 ```
 
 **3. Record an experiment:** `RECORD=1` in `.env`, then `up -d --force-recreate telemetry` → `ros2 bag`
-(mcap) in `docker/data/bags/` (VM: `~/aquarius/data/bags/`). Open it in Foxglove or `ros2 bag play`.
+(mcap) in `docker/data/bags/` (VM: `~/aquarius/data/bags/`). Replay with `ros2 bag play` (or open the mcap in any mcap viewer).
 
 **4. Other ways to the camera:**
 
@@ -319,7 +320,7 @@ docker exec telemetry with-ros ros2 topic hz /uav_0/camera/image_raw
   in noVNC; set the control computer IP to view it there). QGC → Application Settings → Video → UDP h.264, port 5600.
 - `view_cam.py` (OpenCV window) subscribes `/uav_<DRONE_ID>/camera/image_raw` (or `CAMERA_TOPIC`). It works
   on the VM or on a computer that sees the VM's ROS 2 topics (same LAN + `ROS_DOMAIN_ID`, DDS multicast).
-  Across networks use the browser / Foxglove views above.
+  Across networks use the browser / Grafana views above.
 
 > Native (no Docker): `bash scripts/install_telemetry_server.sh` once, then `bash scripts/run_telemetry_native.sh`
 > next to `run_sim_native.sh` (same env) — same topics and ports.
@@ -342,8 +343,10 @@ Project-Aquarius/
 │   │   ├── Dockerfile              Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
 │   │   └── entrypoint.sh           starts N PX4 instances, MAVLink links → CONTROL_HOST
 │   ├── telemetry/
-│   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video / foxglove
-│   │   └── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, Foxglove :8765, ros2 bag
+│   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video + pymavlink
+│   │   ├── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, MQTT bridge, ros2 bag
+│   │   └── mavlink_mqtt.py         PX4 MAVLink → MQTT (Grafana dashboard)
+│   ├── grafana/                    Grafana image: InfluxDB datasource + Aquarius dashboard
 │   └── drone-control/
 │       ├── Dockerfile              ROS 2 Jazzy + MAVSDK + Drone-Control/
 │       ├── entrypoint.sh           sources ROS 2, runs $AUTO_RUN once (e.g. mcpp_mission.py)
@@ -374,7 +377,8 @@ teleop_drone.py ─┐                                  ┌─► PX4 instance 0
 flight_test.py  ─┤                                  │
 mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
 QGroundControl  ◄────────────── udp 14550 ──────────┘   ...             ─┘
-browser :8083 / Foxglove :8765 ◄── telemetry ◄── XRCE agent ◄── PX4 uORB   (VM, same network as px4-sim)
+browser :8083 ◄── telemetry ◄── XRCE agent ◄── PX4 uORB   (VM, same network as px4-sim)
+Grafana :3000 ◄── InfluxDB ◄── Telegraf ◄── MQTT :1883 ◄── mavlink_mqtt.py ◄── PX4 MAVLink 14740+i
 view_cam.py ──► ROS 2 DDS  ◄──────┘          ◄── ros_gz_bridge ◄── Gazebo sensors + camera (gz_x500_mono_cam_down)
 ```
 

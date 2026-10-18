@@ -5,7 +5,8 @@
 #                                                          /uav_i/camera/{image_raw,camera_info}, /clock
 #      ground_truth.py                 true pose           /uav_i/gz/ground_truth (PoseStamped, GT_RATE Hz)
 #   3. web_video_server :WEB_VIDEO_PORT camera in the browser  http://<host>:8083/
-#   4. foxglove_bridge  :FOXGLOVE_PORT  all topics in Foxglove ws://<host>:8765
+#   4. mavlink_mqtt.py  udp :14700     PX4 MAVLink (3rd link per drone) -> MQTT aquarius/<FLEET>/drone/<i>/*
+#                                       -> Telegraf -> InfluxDB -> Grafana :3000 (docker/communication_plan.md)
 #   5. RECORD=1                        ros2 bag (mcap) of RECORD_REGEX -> $DATA_DIR/bags/<date>
 #
 # Must share px4-sim's network: PX4's uXRCE client sends to 127.0.0.1:8888, and Gazebo transport
@@ -17,10 +18,11 @@
 #   GZ_PARTITION     same as px4-sim (Gazebo transport partition)
 #   ROS_DOMAIN_ID    same as px4-sim (PX4 sets UXRCE_DDS_DOM_ID from it)
 #   GZ_CAMERA        camera "<link>/<sensor>" in the model; empty = from PX4_SIM_MODEL, none = off
-#   XRCE_PORT=8888  WEB_VIDEO_PORT=8083  FOXGLOVE_PORT=8765 (empty = off)
+#   XRCE_PORT=8888  WEB_VIDEO_PORT=8083 (empty = off)
+#   MQTT_URL=mqtt://127.0.0.1:1883 (empty = no MQTT bridge)  MAVLINK_IN=udpin:0.0.0.0:14700  FLEET=sim
 #   RECORD (1 = record a bag)  RECORD_REGEX (topics)  DATA_DIR=/data
 #   GT_RATE=30 (Hz, ground truth; empty = off)
-#   ROS_SETUP PX4_MSGS_SETUP XRCE_LIB_DIR GT_SCRIPT   paths (native installs)
+#   ROS_SETUP PX4_MSGS_SETUP XRCE_LIB_DIR GT_SCRIPT MQTT_SCRIPT   paths (native installs)
 set -e
 # job control: non-interactive bash starts background jobs with SIGINT ignored, so cleanup's
 # kill -INT never reached ros2 bag (no metadata.yaml, bag unreadable). With -m they keep SIGINT.
@@ -33,7 +35,9 @@ export GZ_PARTITION=${GZ_PARTITION:-aquarius}
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 XRCE_PORT=${XRCE_PORT:-8888}
 WEB_VIDEO_PORT=${WEB_VIDEO_PORT-8083}
-FOXGLOVE_PORT=${FOXGLOVE_PORT-8765}
+export MQTT_URL=${MQTT_URL-mqtt://127.0.0.1:1883}
+export MAVLINK_IN=${MAVLINK_IN:-udpin:0.0.0.0:14700}
+export FLEET=${FLEET:-sim}
 DATA_DIR=${DATA_DIR:-/data}
 RECORD_REGEX=${RECORD_REGEX:-'.*/fmu/out/.*|/uav_[0-9]+/gz/.*'}
 ROS_SETUP=${ROS_SETUP:-/opt/ros/jazzy/setup.bash}
@@ -41,6 +45,7 @@ PX4_MSGS_SETUP=${PX4_MSGS_SETUP:-/opt/px4_ws/install/setup.bash}
 XRCE_LIB_DIR=${XRCE_LIB_DIR:-/usr/local/lib}
 BRIDGE_CONFIG=${BRIDGE_CONFIG:-/tmp/gz_bridge.yaml}
 GT_SCRIPT=${GT_SCRIPT:-/ground_truth.py}
+MQTT_SCRIPT=${MQTT_SCRIPT:-/mavlink_mqtt.py}
 export GT_RATE=${GT_RATE-30}
 export PX4_NUM_DRONES PX4_GZ_WORLD PX4_SIM_MODEL   # for ground_truth.py
 
@@ -98,7 +103,7 @@ LD_LIBRARY_PATH="$XRCE_LIB_DIR" MicroXRCEAgent udp4 -p "$XRCE_PORT" > >(sed -u '
 PIDS+=($!)
 
 source "$ROS_SETUP"
-# px4_msgs: lets foxglove_bridge / ros2 bag / ros2 topic echo decode /fmu/out/*
+# px4_msgs: lets ros2 bag / ros2 topic echo decode /fmu/out/*
 if [ -f "$PX4_MSGS_SETUP" ]; then source "$PX4_MSGS_SETUP"; else echo "WARN: no px4_msgs ($PX4_MSGS_SETUP)"; fi
 
 # 2. Gazebo -> ROS 2
@@ -120,10 +125,9 @@ if [ -n "$WEB_VIDEO_PORT" ]; then
     PIDS+=($!)
 fi
 
-# 4. all topics -> Foxglove (app.foxglove.dev / desktop: Open connection -> ws://<host>:8765)
-if [ -n "$FOXGLOVE_PORT" ]; then
-    ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:="$FOXGLOVE_PORT" address:=0.0.0.0 \
-        > >(sed -u 's/^/[foxglove] /') 2>&1 &
+# 4. MAVLink telemetry -> MQTT (Grafana dashboard via Telegraf / InfluxDB; no ROS needed)
+if [ -n "$MQTT_URL" ]; then
+    python3 -u "$MQTT_SCRIPT" > >(sed -u 's/^/[mqtt] /') 2>&1 &
     PIDS+=($!)
 fi
 
@@ -145,7 +149,7 @@ if [ -n "$GZ_CAMERA" ]; then
 else
     echo "  camera    : none — $PX4_SIM_MODEL has no camera (PX4_SIM_MODEL=gz_x500_mono_cam_down, PX4_SYS_AUTOSTART=4014)"
 fi
-[ -n "$FOXGLOVE_PORT" ] && echo "  foxglove  : ws://<host>:$FOXGLOVE_PORT"
+[ -n "$MQTT_URL" ] && echo "  MQTT      : $MAVLINK_IN -> $MQTT_URL aquarius/$FLEET/drone/<i>/*  (Grafana http://<host>:3000)"
 
 # exit (docker restarts us) as soon as one part dies
 wait -n "${PIDS[@]}"

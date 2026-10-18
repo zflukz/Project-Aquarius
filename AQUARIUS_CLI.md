@@ -39,7 +39,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `aquarius rtl` (= `aquarius stop`) | return to launch now |
 | `aquarius land` | land where it is now |
 | `aquarius logs [mission\|coverage\|px4\|telemetry]` | follow a log (default `mission`) |
-| `aquarius urls` | links to Gazebo, QGroundControl, camera and Foxglove |
+| `aquarius urls` | links to Gazebo, QGroundControl, camera and the Grafana dashboard |
 | `aquarius down` | stop all containers |
 | `aquarius install` | put the command on your PATH |
 
@@ -83,7 +83,7 @@ drone0 (sysid 1) -> 172.19.0.2:14540 [MAVSDK], :14550 [QGC]
     Gazebo      http://localhost:8080/vnc.html
     QGC         http://localhost:8082/vnc.html
     camera      http://localhost:8083/
-    Foxglove    ws://localhost:8765
+    Grafana     http://localhost:3000/d/aquarius-fleet?var-cam=http://localhost:8083
 ```
 
 **Split setup** (simulator on the VM, scripts on your computer):
@@ -97,7 +97,7 @@ aquarius init control
 aquarius status
 ```
 
-On the VM the links use `http://<VM_IP>:8081/vnc.html` (Gazebo), `:8082` (QGC), `:8083` (camera), `ws://<VM_IP>:8765`.
+On the VM the links use `http://<VM_IP>:8081/vnc.html` (Gazebo), `:8082` (QGC), `:8083` (camera), `http://<VM_IP>:3000` (Grafana, login `admin` / `GRAFANA_ADMIN_PASSWORD`).
 Firewall ports are listed in `docker/README.md`.
 
 ---

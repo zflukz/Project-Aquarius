@@ -9,8 +9,11 @@ Gazebo Harmonic 8.15, gz-gui 8.4, model `gz_x500`, world `baylands`) on 2026-10-
 
 > **2026-10-17 — implemented:** service **`telemetry`** (`docker/telemetry/`, image `aquarius-telemetry`)
 > in `compose.server.yml` + `compose.local.yml` = steps **T2** (uXRCE agent + `px4_msgs`), **T5** (ground
-> truth as ROS topic), **C3** (camera → ROS 2 Image) plus camera in the browser, Foxglove and `ros2 bag`
-> (part of **T4**). See **§4**. Still open: T1 (MAVSDK JSON), T3 (DDS VM ↔ control), T4 database, C2, C4.
+> truth as ROS topic), **C3** (camera → ROS 2 Image) plus camera in the browser and `ros2 bag`
+> (part of **T4**). See **§4**. Still open: T3 (DDS VM ↔ control), C2, C4.
+>
+> **2026-10-18:** T1 + T4 done the [`communication_plan.md`](communication_plan.md) way: MAVLink → `mavlink_mqtt.py`
+> → MQTT → Telegraf → InfluxDB → **Grafana** :3000 (dashboard, history). Foxglove (`foxglove_bridge`, :8765) **removed**.
 
 ```
  Gazebo (sensors, ground truth, camera)
@@ -212,16 +215,16 @@ C3 is done first (2026-10-17) because the `telemetry` container needed ROS 2 any
    Gazebo gz-transport (GZ_PARTITION) ──────────► ros_gz_bridge  ──► /uav_i/gz/*, /uav_i/camera/*
                                                   ground_truth.py ─► /uav_i/gz/ground_truth
                                                   web_video_server :8083   camera in the browser
-                                                  foxglove_bridge  :8765   all topics (plots, map, images)
+                                                  mavlink_mqtt.py  udp 14700 → MQTT → Grafana :3000 (PX4 MAVLink, 3rd link)
                                                   ros2 bag (RECORD=1)      data/bags/<date>  (mcap)
 ```
 
-- Files: `docker/telemetry/Dockerfile` (ROS 2 Jazzy, `ros_gz_bridge`, `web_video_server`, `foxglove_bridge`,
-  `rosbag2_storage_mcap`, Micro XRCE-DDS Agent v2.4.3 from source, `px4_msgs` built from PX4-Autopilot `msg/`
+- Files: `docker/telemetry/Dockerfile` (ROS 2 Jazzy, `ros_gz_bridge`, `web_video_server`,
+  `rosbag2_storage_mcap`, pymavlink + paho-mqtt, Micro XRCE-DDS Agent v2.4.3 from source, `px4_msgs` built from PX4-Autopilot `msg/`
   at `PX4_REF`), `docker/telemetry/entrypoint.sh` (also used natively by `scripts/run_telemetry_native.sh`).
 - **No px4-sim rebuild:** px4-sim only gets env (`GZ_PARTITION`, `ROS_DOMAIN_ID`, `PX4_VIDEO_HOST_IP`).
 - Network: PX4's uXRCE client sends to `127.0.0.1:8888` → telemetry must share px4-sim's network:
-  `network_mode: host` on the VM, `network_mode: service:px4-sim` locally (ports 8083 / 8765 are published
+  `network_mode: host` on the VM, `network_mode: service:px4-sim` locally (port 8083 is published
   on px4-sim). Gazebo transport needs the same `GZ_PARTITION` in both (default partition = hostname:user).
 - `px4_msgs` must match the PX4 firmware. Build with `--build-arg PX4_REF=$(docker exec px4-sim git -C /px4 rev-parse HEAD)`
   (default `main`).
@@ -253,8 +256,7 @@ Use it:
 http://<VM_IP>:8083/                                     # local: http://localhost:8083/
 http://<VM_IP>:8083/stream?topic=/uav_0/camera/image_raw
 
-# every topic: Foxglove (https://app.foxglove.dev or desktop app) → Open connection → ws://<VM_IP>:8765
-#   panels: Plot (/fmu/out/battery_status_v1.remaining), Map (/uav_0/gz/navsat), Image (/uav_0/camera/image_raw), Raw Messages
+# dashboard (MAVLink telemetry, map, camera, history): Grafana http://<VM_IP>:3000 — docker/README.md "Dashboard"
 
 # ROS 2 CLI on the server
 docker exec telemetry with-ros ros2 topic list
@@ -269,7 +271,8 @@ docker exec telemetry with-ros ros2 topic hz /uav_0/gz/imu
 | `PX4_NUM_DRONES` / `PX4_GZ_WORLD` / `PX4_SIM_MODEL` | as px4-sim | topic names |
 | `GZ_PARTITION` / `ROS_DOMAIN_ID` | `aquarius` / `0` | must equal px4-sim |
 | `GZ_CAMERA` | from model | camera `<link>/<sensor>`, `none` = no camera bridge |
-| `WEB_VIDEO_PORT` / `FOXGLOVE_PORT` | `8083` / `8765` | empty = off |
+| `WEB_VIDEO_PORT` | `8083` | empty = off |
+| `MQTT_URL` / `MAVLINK_IN` / `FLEET` | broker / `udpin:0.0.0.0:14700` / `sim` | `mavlink_mqtt.py`, `MQTT_URL` empty = off |
 | `GT_RATE` | `30` | Hz of `/uav_i/gz/ground_truth` (empty = off) |
 | `RECORD` / `RECORD_REGEX` | – / PX4 + gz topics, no images | `1` = `ros2 bag record -s mcap` to `/data/bags` |
 

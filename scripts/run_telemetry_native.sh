@@ -8,8 +8,9 @@
 #   PX4_NUM_DRONES=2 PX4_SIM_MODEL=gz_x500_mono_cam_down bash scripts/run_telemetry_native.sh
 #
 # Gives: ROS 2 /fmu/out/* + /uav_i/fmu/out/* (PX4), /uav_i/gz/* incl. ground_truth (Gazebo),
-#        /uav_i/camera/image_raw (camera models), camera http://<host>:8083/, Foxglove ws://<host>:8765,
-#        RECORD=1 -> ros2 bag in $DATA_DIR/bags.
+#        /uav_i/camera/image_raw (camera models), camera http://<host>:8083/, RECORD=1 -> ros2 bag in
+#        $DATA_DIR/bags, mavlink_mqtt.py: MAVLink udp 14700 -> MQTT_URL (default mqtt://127.0.0.1:1883; broker +
+#        Grafana: docker compose -f docker/compose.server.yml up -d mosquitto influxdb telegraf grafana).
 # Env: as docker/telemetry/entrypoint.sh, plus PX4_ROS_WS (~/px4_ros_ws), DATA_DIR (~/aquarius-data)
 set -e
 
@@ -23,5 +24,6 @@ export PX4_MSGS_SETUP=${PX4_MSGS_SETUP:-$PX4_ROS_WS/install/setup.bash}
 export DATA_DIR=${DATA_DIR:-$HOME/aquarius-data}
 export BRIDGE_CONFIG=${BRIDGE_CONFIG:-/tmp/aquarius_gz_bridge.yaml}
 export GT_SCRIPT=${GT_SCRIPT:-$REPO_DIR/docker/telemetry/ground_truth.py}
+export MQTT_SCRIPT=${MQTT_SCRIPT:-$REPO_DIR/docker/telemetry/mavlink_mqtt.py}
 
 exec bash "$REPO_DIR/docker/telemetry/entrypoint.sh"

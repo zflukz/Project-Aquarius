@@ -17,6 +17,8 @@
 #   VNC_LISTEN       x11vnc bind address (127.0.0.1 on the VM server)
 #   GZ_FOLLOW        drone index the Gazebo camera follows (default 0, empty = free camera)
 #   PX4_GZ_FOLLOW_OFFSET_X/Y/Z  camera offset from that drone, m (ENU world frame)
+#   TELEM            0 = no telemetry link; else PX4 sends 14740+i -> TELEM_HOST:14700 (mavlink_mqtt.py)
+#   TELEM_HOST       where mavlink_mqtt.py runs (default 127.0.0.1 = telemetry container next to us)
 #   CAMERA_WIDTH/HEIGHT/RATE    drone camera models (mono_cam, gimbal, OakD-Lite RGB), default 640x480 @ 10 Hz;
 #                               empty = model default (1280x960 @ 30 -> RTF ~0.03 with software rendering)
 set -e
@@ -28,6 +30,9 @@ API_LOCAL_BASE=14640   # PX4 listens here (drone i -> +i)
 API_REMOTE_BASE=14540  # control computer MAVSDK listens here (drone i -> +i)
 GCS_LOCAL_BASE=18640
 GCS_REMOTE_PORT=14550  # QGroundControl, shared by all drones
+TELEM_LOCAL_BASE=14740 # telemetry link (dashboard), PX4 listens here (drone i -> +i)
+TELEM_PORT=14700       # mavlink_mqtt.py listens here, shared by all drones
+TELEM_HOST=${TELEM_HOST:-127.0.0.1}
 GZ_FOLLOW=${GZ_FOLLOW-0}   # unset -> follow drone 0, set empty -> free camera
 
 mkdir -p "$LOG_DIR"
@@ -154,6 +159,9 @@ if [ -n "$CONTROL_HOST" ]; then
         || echo "WARN: cannot resolve CONTROL_HOST=$CONTROL_HOST, using PX4 default links only"
 fi
 
+TELEM_IP=$(getent ahostsv4 "$TELEM_HOST" | awk 'NR==1 {print $1}')
+TELEM_IP=${TELEM_IP:-$TELEM_HOST}
+
 echo "Starting $PX4_NUM_DRONES x $PX4_SIM_MODEL in world '$PX4_GZ_WORLD' (control: ${CONTROL_IP:-localhost})"
 
 for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
@@ -173,6 +181,20 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
         "$BIN/px4-mavlink" --instance "$i" start -x -f -r 4000000 \
             -u $((GCS_LOCAL_BASE + i)) -t "$CONTROL_IP" -o $GCS_REMOTE_PORT
         echo "drone$i (sysid $((i + 1))) -> $CONTROL_IP:$((API_REMOTE_BASE + i)) [MAVSDK], :$GCS_REMOTE_PORT [QGC]"
+    fi
+    if [ "$TELEM" != "0" ]; then
+        # telemetry link for the dashboard: VM:14740+i -> TELEM_HOST:14700, all drones to one port
+        # (telemetry container's mavlink_mqtt.py tells them apart by sysid). PX4 allows 6 MAVLink
+        # instances: 4 from px4-rc.mavlink + our 2 above -> free the onboard-payload link
+        # (14280+i -> 14030+i, for a MAVLink camera companion; nothing listens there in the sim).
+        "$BIN/px4-mavlink" --instance "$i" stop -u $((14280 + i)) > /dev/null 2>&1 || true
+        sleep 1
+        if "$BIN/px4-mavlink" --instance "$i" start -x -f -r 200000 \
+                -u $((TELEM_LOCAL_BASE + i)) -t "$TELEM_IP" -o $TELEM_PORT; then
+            echo "drone$i (sysid $((i + 1))) -> $TELEM_IP:$TELEM_PORT [telemetry -> MQTT / Grafana]"
+        else
+            echo "WARN: drone$i telemetry link not started (no dashboard data for it)"
+        fi
     fi
 done
 
