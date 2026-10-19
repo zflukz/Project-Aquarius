@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aquarius.local/schemas/survivors.schema.json",
+  "title": "survivors",
+  "description": "Geo-Localization -> Kafka, one message per geolocated detection (A2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "detection_id",
+    "mission_id",
+    "drone_id",
+    "frame_id",
+    "ts_us",
+    "lat",
+    "lon",
+    "conf",
+    "pose_dt_ms",
+    "snapshot_path"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "detection_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "drone_id": {
+      "type": "string",
+      "pattern": "^uav[0-9]+$"
+    },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch microseconds of when the data was produced (A4)"
+    },
+    "lat": {
+      "type": "number",
+      "minimum": -90,
+      "maximum": 90
+    },
+    "lon": {
+      "type": "number",
+      "minimum": -180,
+      "maximum": 180
+    },
+    "conf": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "pose_dt_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "snapshot_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

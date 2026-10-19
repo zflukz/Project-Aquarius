@@ -1,0 +1,133 @@
+# Aquarius data stack — Phase B1
+# Start:  docker compose up -d
+# Stop:   docker compose down        (add -v to also wipe Kafka + DB data)
+#
+# Ports on the host:
+#   9092  Kafka (for the ROS 2–Kafka Bridge and tools running outside Docker)
+#   5432  TimescaleDB + PostGIS
+#   3000  Grafana        (admin / see GRAFANA_ADMIN_PASSWORD in .env)
+#   8080  Kafka UI       (browse topics and messages while debugging)
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: aquarius-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft: one node is both broker and controller (no ZooKeeper)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL = other containers (kafka:19092), EXTERNAL = the host / other machines
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://${KAFKA_ADVERTISED_HOST:-localhost}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Single broker (A3): every replication factor is 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created only by kafka-init (A3), never by a typo in a producer
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Allow 2 MB requests so image-frames fit (topic-level limit is set in create-topics.sh)
+      KAFKA_MESSAGE_MAX_BYTES: 2097152
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 2097152
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: aquarius-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP: kafka:19092
+      PARTITIONS: ${KAFKA_PARTITIONS:-10}
+    volumes:
+      - ./kafka/create-topics.sh:/create-topics.sh:ro
+    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    restart: "no"
+
+  db:
+    # timescaledb-ha already ships PostGIS, so no extra install is needed
+    image: timescale/timescaledb-ha:pg16
+    container_name: aquarius-db
+    restart: unless-stopped
+    ports:
+      - "${DB_HOST_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aquarius}
+      POSTGRES_USER: ${POSTGRES_USER:-aquarius}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aquarius}
+    volumes:
+      - db-data:/home/postgres/pgdata
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aquarius} -d ${POSTGRES_DB:-aquarius}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ingestion:
+    build:
+      context: .                      # repo root, so the image can include schemas/
+      dockerfile: ingestion/Dockerfile
+    container_name: aquarius-ingestion
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      PG_DSN: postgresql://${POSTGRES_USER:-aquarius}:${POSTGRES_PASSWORD:-aquarius}@db:5432/${POSTGRES_DB:-aquarius}
+      BATCH_MAX: 500
+      BATCH_MAX_WAIT_S: 1.0
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: aquarius-grafana
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-aquarius}
+      # Allow refresh intervals down to 1 s for the live panels in Phase D
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 1s
+      PG_USER: ${POSTGRES_USER:-aquarius}
+      PG_PASSWORD: ${POSTGRES_PASSWORD:-aquarius}
+      PG_DB: ${POSTGRES_DB:-aquarius}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: aquarius-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_UI_PORT:-8081}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: aquarius
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+
+volumes:
+  kafka-data:
+  db-data:
+  grafana-data:

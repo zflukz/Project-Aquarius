@@ -1,0 +1,48 @@
+aquarius_bridge:
+  ros__parameters:
+    # Kafka on the ground station (docker compose). Use its IP when the bridge
+    # runs on another machine, and set KAFKA_ADVERTISED_HOST to the same IP.
+    kafka_bootstrap: "localhost:9092"
+
+    # Empty = a new UUID every start. Set it to reuse one mission across restarts.
+    mission_id: ""
+
+    # One entry per drone: "drone_id,px4_namespace,camera_topic" — up to 10 drones (A3).
+    # Drones that are not running are harmless: their topics just stay silent.
+    # Check the real names with `ros2 topic list` (A1 note):
+    #   PX4 SITL instance 1 -> /px4_1/fmu/out/...   (instance 0 may have no namespace: use "/")
+    drones:
+      - "uav1,/uav_1,/uav1/camera/image/compressed"
+      - "uav2,/uav_2,/uav2/camera/image/compressed"
+      - "uav3,/uav_3,/uav3/camera/image/compressed"
+      - "uav4,/uav_4,/uav4/camera/image/compressed"
+      - "uav5,/uav_5,/uav5/camera/image/compressed"
+      - "uav6,/uav_6,/uav6/camera/image/compressed"
+      - "uav7,/uav_7,/uav7/camera/image/compressed"
+      - "uav8,/uav_8,/uav8/camera/image/compressed"
+      - "uav9,/uav_9,/uav9/camera/image/compressed"
+      - "uav10,/uav_10,/uav10/camera/image/compressed"
+
+    telemetry_hz: 10.0       # A2
+    max_image_fps: 2.0       # Open decision: start 1280x720 @ 2 fps
+
+    # compressed: camera already publishes sensor_msgs/CompressedImage (JPEG)
+    # raw:        sensor_msgs/Image (e.g. straight from ros_gz_bridge); the bridge encodes JPEG
+    image_input: "compressed"
+    jpeg_quality: 80
+
+    # A4: how to put PX4 timestamps on the ROS clock
+    #   estimate_offset  : PX4 sends µs since boot -> estimate the offset (default, safe)
+    #   already_ros_time : PX4 timestamps already match the ROS clock (only if verified)
+    px4_time_mode: "estimate_offset"
+
+    # PX4 topic names under each namespace. Newer PX4 releases add a version suffix
+    # to some topics; these match PX4 main (Oct 2026, checked with `ros2 topic list`).
+    # If your PX4 is older/newer, copy the exact names from `ros2 topic list | grep fmu/out`.
+    topic_global_position: "fmu/out/vehicle_global_position"
+    topic_local_position: "fmu/out/vehicle_local_position_v1"
+    topic_attitude: "fmu/out/vehicle_attitude"
+    topic_battery: "fmu/out/battery_status_v1"
+    topic_status: "fmu/out/vehicle_status_v4"
+
+    stats_period_s: 10.0

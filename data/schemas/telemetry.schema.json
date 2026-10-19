@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aquarius.local/schemas/telemetry.schema.json",
+  "title": "telemetry",
+  "description": "Bridge -> Kafka, 10 Hz per drone (A2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "drone_id",
+    "mission_id",
+    "ts_us",
+    "lat",
+    "lon",
+    "alt_amsl",
+    "alt_rel",
+    "q",
+    "vel_ned",
+    "battery_remaining",
+    "battery_voltage",
+    "nav_state",
+    "armed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "drone_id": {
+      "type": "string",
+      "pattern": "^uav[0-9]+$"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "ts_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch microseconds of when the data was produced (A4)"
+    },
+    "lat": {
+      "type": "number",
+      "minimum": -90,
+      "maximum": 90
+    },
+    "lon": {
+      "type": "number",
+      "minimum": -180,
+      "maximum": 180
+    },
+    "alt_amsl": {
+      "type": "number"
+    },
+    "alt_rel": {
+      "type": "number"
+    },
+    "q": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": -1.0001,
+        "maximum": 1.0001
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "w,x,y,z body FRD -> NED"
+    },
+    "vel_ned": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "battery_remaining": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "battery_voltage": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nav_state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "armed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}
