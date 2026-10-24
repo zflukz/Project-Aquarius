@@ -1,12 +1,16 @@
-# Aquarius data stack — Phase B1
+# Aquarius data stack — Phase B1 + Phase C (db-migrate)
 # Start:  docker compose up -d
 # Stop:   docker compose down        (add -v to also wipe Kafka + DB data)
 #
 # Ports on the host:
 #   9092  Kafka (for the ROS 2–Kafka Bridge and tools running outside Docker)
-#   5432  TimescaleDB + PostGIS
+#   5433  TimescaleDB + PostGIS (DB_HOST_PORT; 5432 is often taken by a Windows PostgreSQL)
 #   3000  Grafana        (admin / see GRAFANA_ADMIN_PASSWORD in .env)
-#   8080  Kafka UI       (browse topics and messages while debugging)
+#   8081  Kafka UI       (KAFKA_UI_PORT; browse topics and messages while debugging)
+
+# Fixed project name: keeps the same containers/volumes when the folder is
+# opened through a symlink (e.g. ~/aquarius-data -> repo/data)
+name: aquarius-data
 
 services:
   kafka:
@@ -78,6 +82,25 @@ services:
       timeout: 5s
       retries: 20
 
+  # Phase C: applies db/migrations/*.sql in order, then exits (0 = up to date).
+  # Re-run by hand:  docker compose run --rm db-migrate
+  # Status:          docker compose run --rm db-migrate python -m aquarius_ingest.migrate --status
+  db-migrate:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    container_name: aquarius-db-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_DSN: postgresql://${POSTGRES_USER:-aquarius}:${POSTGRES_PASSWORD:-aquarius}@db:5432/${POSTGRES_DB:-aquarius}
+      MIGRATIONS_DIR: /app/migrations
+    volumes:
+      - ./db/migrations:/app/migrations:ro
+    command: ["python", "-m", "aquarius_ingest.migrate"]
+    restart: "no"
+
   ingestion:
     build:
       context: .                      # repo root, so the image can include schemas/
@@ -87,13 +110,14 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      db:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP: kafka:19092
       PG_DSN: postgresql://${POSTGRES_USER:-aquarius}:${POSTGRES_PASSWORD:-aquarius}@db:5432/${POSTGRES_DB:-aquarius}
       BATCH_MAX: 500
       BATCH_MAX_WAIT_S: 1.0
+      MERGE_RADIUS_M: ${MERGE_RADIUS_M:-3.0}   # C5: detections closer than this = same person
 
   grafana:
     image: grafana/grafana:11.2.0

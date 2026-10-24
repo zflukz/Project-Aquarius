@@ -1,4 +1,4 @@
-# Aquarius — Data Pipeline (Phase B)
+# Aquarius — Data Pipeline (Phase B + C)
 
 โค้ดของ Phase B ใน Data Task Planning: ข้อมูลจากโดรน → ROS 2 → **ROS 2–Kafka Bridge** → Kafka → **DB Ingestion** → TimescaleDB + PostGIS → Grafana
 ทุก message เป็นไปตาม Phase A (A2 schema, A3 topic, A4 timestamp)
@@ -10,13 +10,16 @@
 | B3 DB Ingestion | `ingestion/` (รันเป็น container อัตโนมัติ) | พร้อมรัน |
 | เครื่องมือทดสอบ | `tools/` | โดรนปลอม, วัด loss/latency, ตั้งค่า DDS Discovery Server |
 | JSON Schema | `schemas/` | ใช้ร่วมกันทั้งทีม (AI, Georef, Control) |
+| Phase C ฐานข้อมูล (C1–C5) | `db/migrations/`, `db/tests/`, `tools/phase_c_check.sh` | ดูข้อ 9 |
 
 ```
 aquarius-data/
 ├── docker-compose.yml        Kafka (KRaft) · TimescaleDB+PostGIS · Grafana · Kafka UI · ingestion
 ├── .env.example              ค่าที่ต้องตั้ง (IP ของ Kafka, จำนวน partition)
 ├── kafka/create-topics.sh    สร้าง 5 topic ตาม A3
-├── db/init/                  extension + ตารางขั้นต่ำของ Phase B (Phase C จะต่อเติม)
+├── db/init/                  สร้าง extension (TimescaleDB, PostGIS) ตอนฐานข้อมูลยังว่าง
+├── db/migrations/            ตาราง / index / ฟังก์ชันทั้งหมด เรียงตามเลข (service db-migrate รันให้)
+├── db/tests/                 ชุดตรวจ Phase C
 ├── grafana/provisioning/     เชื่อม Grafana กับฐานข้อมูลให้อัตโนมัติ
 ├── schemas/*.schema.json     สัญญาข้อมูล A2 ในรูปที่โปรแกรมตรวจได้
 ├── ros2_ws/src/aquarius_bridge/
@@ -161,17 +164,17 @@ python3 -m pytest ros2_ws/src/aquarius_bridge/test ingestion/tests tools   # ห
 - [ ] เพิ่มเป็น 10 ลำแล้ว telemetry loss < 5% ผ่าน Wi-Fi ที่ใช้ Discovery Server (ข้อ 5)
 - [ ] telemetry เข้าฐานข้อมูลต่อเนื่องโดยไม่ซ้ำ — restart `ingestion` กลางทางแล้ว `SELECT drone_id, ts, count(*) FROM telemetry GROUP BY 1,2 HAVING count(*) > 1` ได้ 0 แถว (B3)
 - [ ] วัดขนาด JPEG จริงจากกล้อง Gazebo (`image_max_kb` < 2048) — ปิดข้อค้างของ A3
-- [ ] ยืนยันชนิด timestamp ของ PX4 จาก log `px4 offset` — ปิดข้อค้างของ A4
+- [x] ยืนยันชนิด timestamp ของ PX4 จาก log `px4 offset` — ปิดข้อค้างของ A4 (เกณฑ์ ±100 ms, SITL ผ่าน 100%)
 
 ## 8. ชุดทดสอบที่เหลือของ Phase B (ทำตามลำดับ)
 
 | # | ทดสอบ | คำสั่ง | ผ่านเมื่อ |
 |---|---|---|---|
 | 1 | กันข้อมูลซ้ำ (B3) | `tools/check_dedupe.sh` | `PASS: full replay produced no duplicates` |
-| 2 | โดรน 3 ลำพร้อมกล้อง (B2) | `tools/sitl/start_swarm.sh 3` | เห็น `/px4_1 … /px4_3/fmu/out/vehicle_attitude` |
+| 2 | โดรน 3 ลำพร้อมกล้อง (B2) | `tools/sitl/start_swarm.sh 3` | เห็น `/uav_1 … /uav_3/fmu/out/vehicle_attitude` |
 | 3 | กล้อง Gazebo → ROS 2 | `python3 tools/sitl/make_cam_bridge.py` | มี `/uav1..3/camera/image` |
 | 4 | bridge แบบ SITL + กล้อง | ดูด้านล่าง | log: `image-frames=60 telemetry=300` ต่อ 10 วินาที |
-| 5 | เวลาภาพ = เวลา telemetry (A4) | `python3 tools/check_time_sync.py --seconds 30` | ทุกลำ `PASS` (pair_p95 ≤ 50 ms) |
+| 5 | เวลาภาพ = เวลา telemetry (A4) | `python3 tools/check_time_sync.py --seconds 30` | ทุกลำ `PASS` (มี telemetry ก่อน-หลังทุกภาพ ห่างไม่เกิน ±100 ms ≥ 90% ของภาพ, clock_gap < 250 ms) |
 | 6 | ตรวจรวม Phase B | `tools/phase_b_check.sh` | `0 failed` |
 | 7 | DDS ข้าม Wi-Fi 3 → 10 ลำ | `tools/dds/measure_round.sh <label>` | loss < 5 % ทุกลำ |
 
@@ -193,6 +196,56 @@ ros2 launch aquarius_bridge bridge.launch.py use_sim_time:=true \
 
 > โหมด SITL + กล้องต้องใช้ `use_sim_time:=true` เพราะภาพจาก Gazebo ประทับเวลาเป็น sim time ส่วน PX4 ส่งเวลาตามนาฬิกาเครื่อง bridge จะแปลงทั้งคู่ให้อยู่นาฬิกาเดียวกัน — ข้อ 5 คือการพิสูจน์ว่าทำได้จริง
 
+## 9. Phase C — Database Schema และ Spatial Query
+
+### ใช้งาน
+
+```bash
+docker compose up -d --build        # db-migrate รัน migration ที่ยังไม่ได้รันให้เอง แล้ว ingestion ค่อยเริ่ม
+tools/phase_c_check.sh              # ตรวจ C1–C5 บนฐานข้อมูลทดสอบชั่วคราว (ไม่แตะข้อมูลจริง)
+docker compose run --rm db-migrate python -m aquarius_ingest.migrate --status   # ดูว่ารันไฟล์ไหนไปแล้ว
+```
+
+**แก้ schema ต่อจากนี้:** เพิ่มไฟล์ใหม่ `db/migrations/0006_....sql` ห้ามแก้ไฟล์เดิมที่รันไปแล้ว (runner จะเตือนว่า `changed` และไม่รันซ้ำ)
+
+### ตาราง
+
+| ตาราง | มีอะไร | ใครเขียน |
+|---|---|---|
+| `missions` | 1 แถวต่อภารกิจ: ชื่อ, สถานะ, เวลาข้อมูลแรก/ล่าสุด | ingestion สร้างเองเมื่อเจอ `mission_id` ใหม่ · ชื่อ/สถานะตั้งเอง |
+| `drones` | 1 แถวต่อโดรน + เห็นล่าสุดเมื่อไร (`last_ts`) | ingestion |
+| `telemetry` (hypertable) · `detections` · `survivors` · `replanning_events` | จาก Phase B | ingestion |
+| `search_area` | polygon พื้นที่ค้นหา + ขนาดกริด | planner ผ่าน `aq_create_search_area()` |
+| `grid_cells` | ช่องกริดสี่เหลี่ยม (ช่องขอบถูกตัดให้พอดี polygon) | `aq_make_grid()` |
+| `flight_paths` | แนวบิน `planned` (จาก mCPP, มี version เมื่อ replan) และ `flown` (เก็บหลังภารกิจ) | planner / `aq_save_flown_paths()` |
+| `persons` | 1 หมุดต่อผู้ประสบภัย 1 คน (รวมจากหลายเฟรม/หลายลำ) + สถานะ pending/confirmed/rejected | ingestion เรียก `aq_merge_survivors()` |
+| `ground_truth_persons` | ตำแหน่งจริงของคนใน Gazebo (ใช้ใน F3) | สคริปต์โหลด world (Phase F) |
+| view `survivor_pins` | หมุด + ภาพหลักฐานที่มั่นใจสุด | สำหรับ dashboard (E2/E3) |
+
+### ฟังก์ชัน
+
+```sql
+-- สร้างพื้นที่ค้นหาจาก GeoJSON (Polygon หรือ Feature, lon/lat) พร้อมกริด 20 m
+SELECT aq_create_search_area('<mission_id>', '<geojson>', 'โซน A', 20);
+
+-- coverage % (C4): 'flown' = จาก telemetry สด · 'planned' = แผน mCPP · 'saved' = แนวบินที่เก็บไว้
+SELECT * FROM aq_coverage('<area_id>');                 -- เส้นทางบินผ่านช่องไหน นับช่องนั้น
+SELECT * FROM aq_coverage('<area_id>', 'flown', 30);    -- คิดความกว้างภาพกล้อง 30 m
+
+SELECT * FROM aq_flown_paths('<mission_id>');           -- เส้นทางบินจริงต่อลำ (ใช้ใน Geomap ได้)
+SELECT aq_save_flown_paths('<mission_id>');             -- เก็บเส้นทางหลังจบภารกิจ
+SELECT aq_remerge_survivors('<mission_id>', 5.0);       -- ลองรวมหมุดใหม่ด้วยรัศมีอื่น
+```
+
+### ค่าที่ตั้งไว้ (ปรับได้)
+
+| เรื่อง | ค่า | หมายเหตุ |
+|---|---|---|
+| ระบบพิกัด (C3) | เก็บ EPSG:4326 · คำนวณใน UTM โซนของพื้นที่ | ในไทย = 32647 ตามที่ตกลง; `aq_utm_srid()` เลือกโซนเอง เพราะ world ของ PX4 อยู่ซูริก (32632) ถ้าใช้ 32647 ตายตัวพื้นที่จะเพี้ยน |
+| ขนาดกริด | 20 m | รอยืนยันกับ mCPP (Nitis) |
+| รวมหมุด (C5) | ห่างกันไม่เกิน 3 m = คนเดียวกัน | `MERGE_RADIUS_M` ใน `.env` |
+| อายุข้อมูล (C2) | telemetry **ไม่ลบ** · บีบอัดหลัง 7 วัน · `ingest_rejects` ลบด้วย `aq_prune_ingest_rejects()` (30 วัน) | E4/F4 ต้องใช้ข้อมูลทั้งภารกิจ |
+
 ## แก้ปัญหาที่เจอบ่อย
 
 | อาการ | สาเหตุ / วิธีแก้ |
@@ -203,4 +256,5 @@ ros2 launch aquarius_bridge bridge.launch.py use_sim_time:=true \
 | `Message size too large` | ภาพเกิน 2 MB: ลดความละเอียด/คุณภาพ JPEG |
 | เครื่องอื่นต่อ Kafka ไม่ได้ | ตั้ง `KAFKA_ADVERTISED_HOST` เป็น IP ของ ground station แล้ว `docker compose up -d` |
 | `ros2 topic list` ว่างทั้งที่ node รันอยู่ | ลืม source env ของ Discovery Server ใน terminal นั้น (ต้องใช้ super client) |
+| `ingestion` ไม่ขึ้น, `db-migrate` exited (1) | `docker compose logs db-migrate` บอกไฟล์ที่ล้มเหลว แก้แล้ว `docker compose up -d` |
 | เปลี่ยน `KAFKA_PARTITIONS` แล้วไม่มีผล | topic มีอยู่แล้ว: `docker compose down -v` (ลบข้อมูลทั้งหมด) แล้วเปิดใหม่ |

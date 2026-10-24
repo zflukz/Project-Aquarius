@@ -1,6 +1,6 @@
--- Phase B tables: just enough for the ingestion consumer to store every topic.
--- Phase C (C1–C5) adds missions, drones, search_area, grid_cells, flight_paths,
--- ground truth, GiST indexes and retention policies on top of these.
+-- 0001 Phase B tables: just enough for the ingestion consumer to store every topic.
+-- Phase C adds the rest in 0002+ (missions, drones, search_area, grid_cells,
+-- flight_paths, ground truth, persons, indexes, compression).
 --
 -- Duplicate protection: each table has a natural key, and the consumer inserts
 -- with ON CONFLICT DO NOTHING. A message replayed after a crash is ignored.

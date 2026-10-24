@@ -10,6 +10,12 @@ Delivery guarantee
 3. Only after the transaction commits, commit the Kafka offsets.
 If the process dies between 2 and 3, the batch is read again after restart and
 the duplicate rows are ignored by the primary keys -> no loss, no duplicates.
+
+Phase C: in the same transaction, every mission / drone in the batch gets (or
+updates) its row in missions / drones, and new survivors are merged into
+persons (aq_merge_survivors, radius MERGE_RADIUS_M). A failed merge does not
+lose data: the survivors stay stored and are merged the next time survivors of
+that mission arrive (or by hand: SELECT aq_merge_survivors(<mission_id>)).
 On a database error the process exits; Docker restarts it and it resumes from
 the last committed offset.
 """
@@ -25,7 +31,8 @@ from collections import Counter, defaultdict
 import psycopg
 from confluent_kafka import Consumer, KafkaError
 
-from .rows import JSON_TOPICS, REJECT_SQL, SQL, Rejected, decode, load_validators, to_row
+from .rows import (DRONE_UPSERT_SQL, JSON_TOPICS, MERGE_SQL, MISSION_UPSERT_SQL, REJECT_SQL, SQL,
+                   Rejected, Seen, decode, load_validators, to_row)
 
 log = logging.getLogger("ingestion")
 
@@ -39,6 +46,7 @@ def run() -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     batch_max = int(env("BATCH_MAX", "500"))
     wait_s = float(env("BATCH_MAX_WAIT_S", "1.0"))
+    merge_radius_m = float(env("MERGE_RADIUS_M", "3.0"))
     validators = load_validators()
 
     consumer = Consumer({
@@ -66,7 +74,7 @@ def run() -> int:
         while not stop["flag"]:
             msgs = consumer.consume(num_messages=batch_max, timeout=wait_s)
             if msgs:
-                rows, rejects = defaultdict(list), []
+                rows, rejects, seen = defaultdict(list), [], Seen()
                 for m in msgs:
                     if m.error():
                         if m.error().code() != KafkaError._PARTITION_EOF:
@@ -74,7 +82,9 @@ def run() -> int:
                         continue
                     topic = m.topic()
                     try:
-                        rows[topic].append(to_row(topic, decode(topic, m.value(), validators)))
+                        msg = decode(topic, m.value(), validators)
+                        rows[topic].append(to_row(topic, msg))
+                        seen.add(topic, msg)
                     except Rejected as e:
                         payload = (m.value() or b"")[:4000].decode("utf-8", "replace")
                         rejects.append((topic, m.partition(), m.offset(), str(e), payload))
@@ -82,12 +92,25 @@ def run() -> int:
                 try:
                     with conn.transaction():
                         with conn.cursor() as cur:
+                            # parents first: survivors / replanning_events reference missions
+                            if seen.missions:
+                                cur.executemany(MISSION_UPSERT_SQL, seen.mission_rows())
+                            if seen.drones:
+                                cur.executemany(DRONE_UPSERT_SQL, seen.drone_rows())
                             for topic, batch in rows.items():
                                 cur.executemany(SQL[topic], batch)
                                 stats[topic] += len(batch)
                             if rejects:
                                 cur.executemany(REJECT_SQL, rejects)
                                 stats["rejected"] += len(rejects)
+                            for mission in sorted(seen.survivor_missions):
+                                try:
+                                    with conn.transaction():      # savepoint: a merge error keeps the data
+                                        cur.execute(MERGE_SQL, (mission, merge_radius_m))
+                                        stats["merged"] += cur.fetchone()[0]
+                                except psycopg.Error as e:
+                                    log.warning("merge of survivors for mission %s failed (%s); "
+                                                "retried when more survivors arrive", mission, e)
                 except psycopg.Error:
                     log.exception("database write failed; exiting so the batch is replayed after restart")
                     consumer.close()

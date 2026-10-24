@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
-from aquarius_ingest.rows import SQL, Rejected, decode, load_validators, to_row, ts_from_us  # noqa: E402
+from aquarius_ingest.rows import (DRONE_UPSERT_SQL, MISSION_UPSERT_SQL, SQL, Rejected, Seen,  # noqa: E402
+                                  decode, load_validators, to_row, ts_from_us)
 
 V = load_validators(os.path.join(HERE, "..", "..", "schemas"))
 MISSION = str(uuid.uuid4())
@@ -79,6 +80,34 @@ class TestDecode(unittest.TestCase):
         row = to_row("replanning-events", decode("replanning-events", enc(m), V))
         self.assertEqual(row[3], "mission_complete")
         self.assertIsNone(row[6])
+
+
+class TestPhaseC(unittest.TestCase):
+    def test_bad_uuid_is_rejected_not_crashing_the_batch(self):
+        for topic, field in (("telemetry", "mission_id"), ("survivors", "detection_id"),
+                             ("replanning-events", "event_id")):
+            m = dict(SAMPLES[topic], **{field: "--------" + "-0000-0000-0000-" + "0" * 12})
+            with self.assertRaises(Rejected, msg=topic) as cm:
+                decode(topic, enc(m), V)
+            self.assertIn(field, str(cm.exception))
+
+    def test_seen_keeps_min_and_max_time_per_mission_and_drone(self):
+        seen = Seen()
+        for ts, did in ((3_000_000, "uav1"), (1_000_000, "uav2"), (2_000_000, "uav1")):
+            seen.add("telemetry", decode("telemetry", enc(telemetry(ts_us=ts, drone_id=did)), V))
+        seen.add("detections", decode("detections", enc(SAMPLES["detections"]), V))   # no mission_id
+        seen.add("survivors", decode("survivors", enc(SAMPLES["survivors"]), V))
+        (mid, first, last), = seen.mission_rows()
+        self.assertEqual(mid, MISSION)
+        self.assertEqual(first, ts_from_us(1_000_000))
+        self.assertEqual(last, ts_from_us(SAMPLES["survivors"]["ts_us"]))
+        drones = {d: (a, b) for d, a, b in seen.drone_rows()}
+        # uav1: telemetry at 2 s and 3 s, plus the detection sample (later)
+        self.assertEqual(drones["uav1"], (ts_from_us(2_000_000), ts_from_us(SAMPLES["detections"]["ts_us"])))
+        self.assertEqual(set(drones), {"uav1", "uav2"})
+        self.assertEqual(seen.survivor_missions, {MISSION})
+        for sql, rows in ((MISSION_UPSERT_SQL, seen.mission_rows()), (DRONE_UPSERT_SQL, seen.drone_rows())):
+            self.assertEqual(sql.count("%s"), len(rows[0]))
 
 
 class TestTime(unittest.TestCase):
