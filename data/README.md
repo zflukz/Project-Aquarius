@@ -1,4 +1,4 @@
-# Aquarius — Data Pipeline (Phase B + C)
+# Aquarius — Data Pipeline (Phase B + C + D)
 
 โค้ดของ Phase B ใน Data Task Planning: ข้อมูลจากโดรน → ROS 2 → **ROS 2–Kafka Bridge** → Kafka → **DB Ingestion** → TimescaleDB + PostGIS → Grafana
 ทุก message เป็นไปตาม Phase A (A2 schema, A3 topic, A4 timestamp)
@@ -11,6 +11,7 @@
 | เครื่องมือทดสอบ | `tools/` | โดรนปลอม, วัด loss/latency, ตั้งค่า DDS Discovery Server |
 | JSON Schema | `schemas/` | ใช้ร่วมกันทั้งทีม (AI, Georef, Control) |
 | Phase C ฐานข้อมูล (C1–C5) | `db/migrations/`, `db/tests/`, `tools/phase_c_check.sh` | ดูข้อ 9 |
+| Phase D dashboard (D1–D3) | `grafana/`, `imagestream/`, `tools/demo_mission.py` | ดูข้อ 10 |
 
 ```
 aquarius-data/
@@ -245,6 +246,39 @@ SELECT aq_remerge_survivors('<mission_id>', 5.0);       -- ลองรวมห
 | ขนาดกริด | 20 m | รอยืนยันกับ mCPP (Nitis) |
 | รวมหมุด (C5) | ห่างกันไม่เกิน 3 m = คนเดียวกัน | `MERGE_RADIUS_M` ใน `.env` |
 | อายุข้อมูล (C2) | telemetry **ไม่ลบ** · บีบอัดหลัง 7 วัน · `ingest_rejects` ลบด้วย `aq_prune_ingest_rejects()` (30 วัน) | E4/F4 ต้องใช้ข้อมูลทั้งภารกิจ |
+
+## 10. Phase D — Monitoring Dashboard
+
+```bash
+docker compose up -d --build        # เพิ่ม service imagestream (:8090) และ migration 0007
+tools/phase_c_check.sh              # ตอนนี้ตรวจ helper ของ dashboard และรันทุก query ของ panel ด้วย
+```
+
+Grafana http://localhost:3000 เปิดมาที่ **Aquarius — Mission monitor** เลือกภารกิจที่ตัวแปร `ภารกิจ` ด้านบน
+
+| ส่วน | มีอะไร | งาน |
+|---|---|---|
+| ภาพรวมภารกิจ | coverage %, จำนวนผู้ประสบภัย, การตรวจพบ, โดรนที่ส่งข้อมูล, message ถูกปฏิเสธ | — |
+| แผนที่ | กริด (เขียว = ค้นแล้ว), แนวบินตามแผน, แนวบินจริง, โดรน, หมุดผู้ประสบภัย, ตำแหน่งจริง (demo) | D2 |
+| สถานะโดรน | ตารางค่าล่าสุด + กราฟแบต/ความสูง refresh ทุก 2 วินาที | D1 |
+| กล้อง | ภาพสดทุกลำจาก Kafka `image-frames` (service `imagestream`) | — |
+| สุขภาพ pipeline | ความหน่วง p50/p95 โดรน → ฐานข้อมูล, telemetry Hz ต่อลำ | D3 |
+
+### ภารกิจตัวอย่าง (ไม่ต้องเปิด Gazebo)
+
+```bash
+python3 tools/demo_mission.py | docker exec -i aquarius-db psql -U aquarius -d aquarius -q   # พื้นที่ + แผนบิน + คน 8 คน
+$(python3 tools/demo_mission.py --print-fly-command)                                       # โดรนปลอม 3 ลำบินจริงผ่าน Kafka
+```
+
+แล้วเลือกภารกิจ **Demo — Ayutthaya** ใน dashboard รันขั้นแรกซ้ำได้เพื่อเริ่มใหม่ ภารกิจตัวอย่างใช้ `sim_producer.py --persons` ซึ่งส่ง detections + survivors (คลาดเคลื่อน ~1 m) ตอนโดรนบินผ่านคน จึงเห็นการรวมหมุด (C5) ทำงานจริง
+
+### แก้ dashboard
+
+แก้ที่ `grafana/build_dashboards.py` แล้ว `python3 grafana/build_dashboards.py` (Grafana โหลดใหม่ใน 30 วินาที) SQL ที่ panel ใช้อยู่ใน migration 0007 (`aq_drone_status`, `aq_cell_coverage`, `aq_current_area`)
+
+- **ดูจากเครื่องอื่น:** เปลี่ยนตัวแปร `ที่อยู่กล้อง` เป็น `http://<IP ground station>:8090`
+- **Gazebo ช้ากว่าเวลาจริง:** แนวบินจริงและกราฟใช้เวลาของข้อมูล (`ts`) ถ้าไม่เห็นให้ขยายช่วงเวลามุมขวาบน ส่วนความหน่วงใน sim เชื่อได้เฉพาะตอน RTF ≈ 1
 
 ## แก้ปัญหาที่เจอบ่อย
 

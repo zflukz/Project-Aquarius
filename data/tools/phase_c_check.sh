@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Phase C done-checks (C1-C5) in one command. Needs `docker compose up -d` first.
+# Database done-checks (Phase C: C1-C5, Phase D: dashboard helpers) in one command. Needs `docker compose up -d` first.
 #
 #   tools/phase_c_check.sh
 #
 # 1. the real database: every migration applied?
 # 2. a THROWAWAY database (aquarius_ctest): created empty, every migration
-#    applied from zero (C1 "runs on an empty database"), then db/tests/phase_c_test.sql
+#    applied from zero (C1 "runs on an empty database"), then every db/tests/phase_*_test.sql
 #    checks grid, UTM, coverage (19 % by hand), index use (EXPLAIN) and the
 #    survivor merge. The throwaway database is dropped at the end; real data is not touched.
 set -uo pipefail
@@ -36,12 +36,29 @@ echo "  (second run must change nothing:)"
 docker compose run --rm -T -e PG_DSN="postgresql://$U:$P@db:5432/$TEST_DB" db-migrate | sed 's/^/  /'
 
 echo
-out=$(psql_db "$TEST_DB" -f - < db/tests/phase_c_test.sql 2>&1)
-echo "$out" | grep -E "PASS|FAIL|ERROR|ALL PHASE C" | sed -E 's/^(psql:[^ ]+ )?(NOTICE|ERROR): +/  /'
+out=""; ok_files=0; n_files=0
+for f in db/tests/phase_*_test.sql; do        # phase_c_test.sql, phase_d_test.sql, ...
+  n_files=$((n_files+1))
+  o=$(psql_db "$TEST_DB" -f - < "$f" 2>&1)
+  echo "$o" | grep -E "PASS|FAIL|ERROR" | sed -E 's/^(psql:[^ ]+ )?(NOTICE|ERROR): +/  /'
+  echo "$o" | grep -q "CHECKS PASSED" && ok_files=$((ok_files+1)) || { out="$out
+--- $f
+$o"; break; }
+done
+if [[ $ok_files -eq $n_files ]]; then
+  # every Grafana panel query must run on the test data (phase_d_test.sql's mission)
+  o=$(python3 tools/dashboard_sql.py d0000000-0000-4000-8000-000000000001 | psql_db "$TEST_DB" -q -o /dev/null -f - 2>&1)
+  if echo "$o" | grep -q "DASHBOARD QUERIES OK"; then
+    echo "  PASS D $(echo "$o" | grep -o 'DASHBOARD QUERIES OK ([0-9]*)' | grep -o '[0-9]*') dashboard queries run without error"
+  else
+    ok_files=-1; out="--- dashboard queries
+$(echo "$o" | tail -15)"
+  fi
+fi
 psql_db "$DB" -qc "DROP DATABASE IF EXISTS $TEST_DB" >/dev/null 2>&1
 echo
-if echo "$out" | grep -q "ALL PHASE C CHECKS PASSED"; then
-  echo "RESULT: Phase C checks passed ($(echo "$out" | grep -cE 'PASS C[0-9]') checks)"
+if [[ $ok_files -eq $n_files ]]; then
+  echo "RESULT: database checks passed ($n_files test files)"
 else
-  echo "RESULT: FAILED - full output:"; echo "$out" | tail -40; exit 1
+  echo "RESULT: FAILED - output of the failing file:"; echo "$out" | tail -40; exit 1
 fi

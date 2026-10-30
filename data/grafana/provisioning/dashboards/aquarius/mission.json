@@ -1,0 +1,1362 @@
+{
+  "uid": "aquarius-mission",
+  "title": "Aquarius — Mission monitor",
+  "tags": [
+    "aquarius",
+    "phase-d"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "2s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1s",
+      "2s",
+      "5s",
+      "10s",
+      "30s",
+      "1m"
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "mission",
+        "label": "ภารกิจ",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "aquarius-db"
+        },
+        "query": "SELECT mission_id::text AS __value, coalesce(name, left(mission_id::text, 8)) || ' · ' || coalesce(to_char(last_ts AT TIME ZONE 'Asia/Bangkok', 'DD Mon HH24:MI'), 'no data') AS __text FROM missions ORDER BY last_ts DESC NULLS LAST LIMIT 50",
+        "refresh": 2,
+        "sort": 0,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "swath",
+        "label": "ความกว้างกล้อง (m)",
+        "type": "custom",
+        "query": "0,30,70",
+        "current": {
+          "text": "70",
+          "value": "70"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "description": "0 = นับช่องที่เส้นบินผ่าน (C4) · 70 = ภาพกว้างจริงที่ความสูง 30 m (HFOV 100°)"
+      },
+      {
+        "name": "stream_url",
+        "label": "ที่อยู่กล้อง",
+        "type": "textbox",
+        "query": "http://localhost:8090",
+        "current": {
+          "text": "http://localhost:8090",
+          "value": "http://localhost:8090"
+        },
+        "options": [],
+        "hide": 0,
+        "description": "เครื่องอื่นให้ใส่ IP ของ ground station เช่น http://192.168.1.10:8090"
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "ภาพรวมภารกิจ",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Coverage",
+      "description": "พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT c.coverage_pct\n  FROM search_area a, aq_coverage(a.area_id, 'flown', $swath) c\n WHERE a.area_id = aq_current_area('$mission')"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "orange"
+              },
+              {
+                "value": 50,
+                "color": "yellow"
+              },
+              {
+                "value": 90,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "ผู้ประสบภัยที่พบ",
+      "description": "จำนวนหมุด (คน) หลังรวมการตรวจพบที่ห่างกันไม่เกิน MERGE_RADIUS_M (C5)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 5,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT count(*) FROM persons WHERE mission_id = '$mission' AND status <> 'rejected'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              },
+              {
+                "value": 1,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "การตรวจพบ",
+      "description": "survivors ทั้งหมดก่อนรวม (หลายเฟรม / หลายลำต่อคน)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT count(*) FROM survivors WHERE mission_id = '$mission'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "โดรนที่ส่งข้อมูล",
+      "description": "โดรนที่มี telemetry เข้าฐานข้อมูลภายใน 10 วินาทีล่าสุด",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT count(*) FROM aq_drone_status('$mission', interval '10 seconds')"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "message ถูกปฏิเสธ (1 ชม.)",
+      "description": "message ที่ไม่ผ่าน schema ดูสาเหตุในตาราง ingest_rejects",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 19,
+        "y": 1,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT count(*) FROM ingest_rejects WHERE received_at > now() - interval '1 hour'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 1,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "แผนที่และสถานะโดรน",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "geomap",
+      "title": "แผนที่ภารกิจ",
+      "description": "กริดเปลี่ยนเป็นสีเขียวเมื่อแนวบินจริงผ่าน (D2) · จุดเทา = แนวบินตามแผน mCPP · สามเหลี่ยมแดง = หมุดผู้ประสบภัย ตัวเลข = จำนวนครั้งที่ตรวจพบ · วงกลมฟ้า = ตำแหน่งจริง (demo/F3)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 14,
+        "h": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT lat, lon, CASE WHEN covered THEN 1 ELSE 0 END AS covered, cell_row AS \"แถว\", cell_col AS \"คอลัมน์\"\n  FROM aq_cell_coverage(aq_current_area('$mission'), $swath)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT ST_Y(p.geom) AS lat, ST_X(p.geom) AS lon, fp.drone_id\n  FROM flight_paths fp,\n       LATERAL ST_DumpPoints(ST_Segmentize(fp.geom::geography, 10)::geometry) p\n WHERE fp.mission_id = '$mission' AND fp.kind = 'planned'\n   AND fp.version = (SELECT max(version) FROM flight_paths q\n                      WHERE q.mission_id = fp.mission_id AND q.drone_id = fp.drone_id AND q.kind = 'planned')"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT DISTINCT ON (drone_id, time_bucket('2 seconds', ts)) lat, lon, drone_id\n  FROM telemetry\n WHERE mission_id = '$mission' AND $__timeFilter(ts) AND (alt_rel IS NULL OR alt_rel >= 2)\n ORDER BY drone_id, time_bucket('2 seconds', ts), ts"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, lat, lon, round(battery_pct) AS \"แบต %\", nav_state AS \"โหมด\"\n  FROM aq_drone_status('$mission', interval '1 hour')"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT lat, lon, n_detections AS \"ตรวจพบ\", round(max_conf::numeric, 2) AS \"มั่นใจ\", status\n  FROM survivor_pins WHERE mission_id = '$mission' AND status <> 'rejected'"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT lat, lon, label FROM ground_truth_persons WHERE mission_id = '$mission'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "drone_id"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "uav1": {
+                        "color": "#73bf69",
+                        "index": 1
+                      },
+                      "uav2": {
+                        "color": "#f2cc0c",
+                        "index": 2
+                      },
+                      "uav3": {
+                        "color": "#8ab8ff",
+                        "index": 3
+                      },
+                      "uav4": {
+                        "color": "#ff780a",
+                        "index": 4
+                      },
+                      "uav5": {
+                        "color": "#f2495c",
+                        "index": 5
+                      },
+                      "uav6": {
+                        "color": "#5794f2",
+                        "index": 6
+                      },
+                      "uav7": {
+                        "color": "#b877d9",
+                        "index": 7
+                      },
+                      "uav8": {
+                        "color": "#ff9830",
+                        "index": 8
+                      },
+                      "uav9": {
+                        "color": "#96d98d",
+                        "index": 9
+                      },
+                      "uav10": {
+                        "color": "#ca95e5",
+                        "index": 10
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "uav0": {
+                        "color": "#fade2a",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "covered"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "#8e8e8e"
+                    },
+                    {
+                      "value": 1,
+                      "color": "green"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "view": {
+          "id": "fit",
+          "lat": 0,
+          "lon": 0,
+          "zoom": 16,
+          "allLayers": true,
+          "padding": 10,
+          "maxZoom": 19
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showMeasure": true
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Basemap"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "กริด (เขียว = ค้นแล้ว)",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 7,
+                  "min": 7,
+                  "max": 7
+                },
+                "color": {
+                  "fixed": "#8e8e8e",
+                  "field": "covered"
+                },
+                "opacity": 0.45,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/square.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "A"
+            },
+            "tooltip": true
+          },
+          {
+            "type": "markers",
+            "name": "แนวบินตามแผน",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 2,
+                  "min": 2,
+                  "max": 2
+                },
+                "color": {
+                  "fixed": "#b0b0b0"
+                },
+                "opacity": 0.6,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "B"
+            },
+            "tooltip": true
+          },
+          {
+            "type": "markers",
+            "name": "แนวบินจริง",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 3,
+                  "min": 3,
+                  "max": 3
+                },
+                "color": {
+                  "fixed": "blue",
+                  "field": "drone_id"
+                },
+                "opacity": 0.9,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "C"
+            },
+            "tooltip": true
+          },
+          {
+            "type": "markers",
+            "name": "ตำแหน่งจริงของคน (ground truth)",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 9,
+                  "min": 9,
+                  "max": 9
+                },
+                "color": {
+                  "fixed": "#5794f2"
+                },
+                "opacity": 0.5,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "F"
+            },
+            "tooltip": true
+          },
+          {
+            "type": "markers",
+            "name": "ผู้ประสบภัย",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 12,
+                  "min": 12,
+                  "max": 12
+                },
+                "color": {
+                  "fixed": "red"
+                },
+                "opacity": 1.0,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/triangle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                },
+                "text": {
+                  "field": "ตรวจพบ",
+                  "mode": "field",
+                  "fixed": ""
+                },
+                "textConfig": {
+                  "fontSize": 12,
+                  "offsetX": 0,
+                  "offsetY": -14,
+                  "textAlign": "center",
+                  "textBaseline": "middle"
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "E"
+            },
+            "tooltip": true
+          },
+          {
+            "type": "markers",
+            "name": "โดรน",
+            "config": {
+              "style": {
+                "size": {
+                  "fixed": 14,
+                  "min": 14,
+                  "max": 14
+                },
+                "color": {
+                  "fixed": "blue",
+                  "field": "drone_id"
+                },
+                "opacity": 1.0,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                },
+                "text": {
+                  "field": "drone_id",
+                  "mode": "field",
+                  "fixed": ""
+                },
+                "textConfig": {
+                  "fontSize": 12,
+                  "offsetX": 0,
+                  "offsetY": -14,
+                  "textAlign": "center",
+                  "textBaseline": "middle"
+                }
+              },
+              "showLegend": false
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "lat",
+              "longitude": "lon"
+            },
+            "filterData": {
+              "id": "byRefId",
+              "options": "D"
+            },
+            "tooltip": true
+          }
+        ],
+        "tooltip": {
+          "mode": "details"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "สถานะโดรน",
+      "description": "ค่าล่าสุดของแต่ละลำ (D1) · ล่าสุด (s) = วินาทีตั้งแต่ข้อมูลเข้าฐานข้อมูล เกิน 5 = สัญญาณหาย",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 6,
+        "w": 10,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id AS \"โดรน\", round(battery_pct) AS \"แบต %\", round(alt_rel::numeric, 1) AS \"สูง (m)\",\n       round(speed_ms::numeric, 1) AS \"เร็ว (m/s)\", nav_state AS \"โหมด\", armed,\n       round(age_s::numeric, 1) AS \"ล่าสุด (s)\"\n  FROM aq_drone_status('$mission', interval '1 hour')"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "แบต %"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "red"
+                    },
+                    {
+                      "value": 20,
+                      "color": "orange"
+                    },
+                    {
+                      "value": 40,
+                      "color": "green"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ล่าสุด (s)"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 5,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "แบตเตอรี่",
+      "description": "D1",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 13,
+        "w": 10,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_remaining) * 100 AS \"แบต %\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "ความสูง",
+      "description": "D1",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 18,
+        "w": 10,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(alt_rel) AS \"สูง (m)\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "lengthm",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "หมุดผู้ประสบภัย",
+      "description": "เปลี่ยนสถานะ: UPDATE persons SET status = 'confirmed' WHERE person_id = ... (หน้าจอยืนยันอยู่ใน Phase E)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT left(person_id::text, 8) AS \"หมุด\", status AS \"สถานะ\", n_detections AS \"ตรวจพบ (ครั้ง)\",\n       round(max_conf::numeric, 2) AS \"มั่นใจสูงสุด\", round(lat::numeric, 6) AS lat, round(lon::numeric, 6) AS lon,\n       first_ts AS \"พบครั้งแรก\", last_ts AS \"เห็นล่าสุด\", best_snapshot AS \"ภาพหลักฐาน\"\n  FROM survivor_pins WHERE mission_id = '$mission' ORDER BY first_ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "กล้อง (สด จาก Kafka image-frames)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "text",
+      "title": "",
+      "description": "ภาพเดียวกับที่ AI Detection อ่าน · ตั้งที่อยู่ service ที่ตัวแปร stream_url",
+      "datasource": null,
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 11
+      },
+      "targets": [],
+      "options": {
+        "mode": "html",
+        "content": "<iframe src=\"$stream_url/?minw=280\" style=\"width:100%;height:100%;border:0;background:#111217\"></iframe>"
+      }
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "สุขภาพ pipeline (D3)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "ความหน่วงโดรน → ฐานข้อมูล",
+      "description": "received_at − ts ของ telemetry ทุก 10 วินาที · เชื่อได้เมื่อนาฬิกาตรงกัน (โดรนจริง + chrony หรือ Gazebo ที่ RTF ≈ 1)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'),\n       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS \"p50\",\n       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS \"p95\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(received_at)\n GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "telemetry ที่เข้าฐานข้อมูลต่อลำ",
+      "description": "ควรเป็น ~10 Hz ต่อลำ (A2) · ต่ำกว่านั้น = ข้อมูลหายระหว่างทาง (D3 loss rate)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-db"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'), drone_id AS metric, count(*) / 10.0 AS \"Hz\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(received_at)\n GROUP BY 1, drone_id ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ]
+}

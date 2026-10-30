@@ -7,6 +7,7 @@
 #   5433  TimescaleDB + PostGIS (DB_HOST_PORT; 5432 is often taken by a Windows PostgreSQL)
 #   3000  Grafana        (admin / see GRAFANA_ADMIN_PASSWORD in .env)
 #   8081  Kafka UI       (KAFKA_UI_PORT; browse topics and messages while debugging)
+#   8090  Camera view    (IMAGESTREAM_PORT; live MJPEG of every drone, Phase D)
 
 # Fixed project name: keeps the same containers/volumes when the folder is
 # opened through a symlink (e.g. ~/aquarius-data -> repo/data)
@@ -119,6 +120,21 @@ services:
       BATCH_MAX_WAIT_S: 1.0
       MERGE_RADIUS_M: ${MERGE_RADIUS_M:-3.0}   # C5: detections closer than this = same person
 
+  # Phase D: live camera view (MJPEG) from Kafka image-frames, embedded in Grafana
+  imagestream:
+    build:
+      context: .
+      dockerfile: imagestream/Dockerfile
+    container_name: aquarius-imagestream
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "${IMAGESTREAM_PORT:-8090}:8090"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+
   grafana:
     image: grafana/grafana:11.2.0
     container_name: aquarius-grafana
@@ -132,6 +148,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-aquarius}
       # Allow refresh intervals down to 1 s for the live panels in Phase D
       GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 1s
+      # Phase D: the camera panel embeds the imagestream page in an <iframe>
+      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
+      # open the mission dashboard on login
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/aquarius/mission.json
       PG_USER: ${POSTGRES_USER:-aquarius}
       PG_PASSWORD: ${POSTGRES_PASSWORD:-aquarius}
       PG_DB: ${POSTGRES_DB:-aquarius}

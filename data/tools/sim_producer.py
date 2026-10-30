@@ -6,10 +6,17 @@ telemetry at 10 Hz and a synthetic JPEG at 2 fps, exactly in the A2 format.
 When its battery drops below 20% it switches to AUTO_RTL and an
 `rtl_triggered` event is sent to replanning-events.
 
+With --persons N, N people are placed in the area (same places for the same
+--seed). Whenever a drone takes a photo with a person inside its camera
+footprint it also sends what AI Detection + Geo-Localization would send:
+a `detections` message and a `survivors` message (position with ~1 m noise).
+That exercises the merge into persons (C5) and the dashboard pins (Phase D).
+
 Examples
     python3 tools/sim_producer.py --drones 3                 # run until Ctrl+C
     python3 tools/sim_producer.py --drones 3 --seconds 60 --loss 0.05
     python3 tools/sim_producer.py --dry-run --seconds 2      # print + validate, no Kafka
+    python3 tools/demo_mission.py --help                     # demo mission for the dashboard
 
 Needs: pip install confluent-kafka pillow   (jsonschema for --dry-run)
 """
@@ -33,6 +40,17 @@ def offset_latlon(lat0, lon0, north_m, east_m):
     dlat = math.degrees(north_m / EARTH_R)
     dlon = math.degrees(east_m / (EARTH_R * math.cos(math.radians(lat0))))
     return lat0 + dlat, lon0 + dlon
+
+
+def planted_persons(n, area_m, lat0, lon0, seed=7):
+    """n people at fixed places inside the area: [(label, east_m, north_m, lat, lon)]."""
+    rnd = random.Random(seed)
+    out = []
+    for i in range(n):
+        e, nn = rnd.uniform(0.1, 0.9) * area_m, rnd.uniform(0.1, 0.9) * area_m
+        lat, lon = offset_latlon(lat0, lon0, nn, e)
+        out.append((f"person_{i + 1}", e, nn, lat, lon))
+    return out
 
 
 class FakeDrone:
@@ -75,6 +93,14 @@ class FakeDrone:
             d -= L
         ax, ay = self._segs[0][0]
         return ax, ay, 0.0
+
+    def planned_lanes(self):
+        """The planned lawnmower (one pass, no way back), for flight_paths."""
+        return self._waypoints()[: 2 * max(1, int(self.width // self.spacing))]
+
+    def position_m(self):
+        x, y, _ = self._pos_on_path(self.dist)
+        return x, y
 
     def step(self, dt):
         self.dist += self.speed * dt
@@ -129,6 +155,10 @@ def main():
     ap.add_argument("--drain-per-min", type=float, default=0.05, help="battery fraction used per minute")
     ap.add_argument("--loss", type=float, default=0.0, help="drop this fraction of telemetry on purpose")
     ap.add_argument("--mission-id", default="")
+    ap.add_argument("--persons", type=int, default=0, help="people in the area -> detections + survivors")
+    ap.add_argument("--seed", type=int, default=7, help="where the people are (same seed = same places)")
+    ap.add_argument("--footprint-m", type=float, default=35.0,
+                    help="half width of the camera footprint on the ground (30 m altitude, HFOV 100 deg)")
     ap.add_argument("--dry-run", action="store_true", help="print and schema-check messages, no Kafka")
     a = ap.parse_args()
 
@@ -141,7 +171,7 @@ def main():
     if a.dry_run:
         import jsonschema
         schemas = {}
-        for t in ("telemetry", "replanning-events"):
+        for t in ("telemetry", "replanning-events", "detections", "survivors"):
             with open(os.path.join(REPO, "schemas", f"{t}.schema.json")) as f:
                 schemas[t] = json.load(f)
 
@@ -160,7 +190,7 @@ def main():
         safe = Producer({"bootstrap.servers": a.bootstrap, "acks": "all", "enable.idempotence": True})
 
         def send(topic, key, value, headers=None):
-            p = safe if topic == "replanning-events" else fast
+            p = safe if topic in ("replanning-events", "survivors") else fast
             p.produce(topic, key=key.encode(), value=value, headers=headers)
 
         def poll():
@@ -171,7 +201,9 @@ def main():
             fast.flush(5)
             safe.flush(5)
 
-    print(f"mission_id={mission_id} drones={[d.id for d in drones]} -> "
+    people = planted_persons(a.persons, a.area_m, lat0, lon0, a.seed)
+    rnd = random.Random()
+    print(f"mission_id={mission_id} drones={[d.id for d in drones]} persons={len(people)} -> "
           f"{'DRY RUN' if a.dry_run else a.bootstrap}", file=sys.stderr)
     dt = 1.0 / a.hz
     img_every = int(round(a.hz / a.fps)) if a.fps > 0 else 0
@@ -199,6 +231,26 @@ def main():
                                ("ts_us", str(ts_us).encode()), ("frame_id", str(d.frame_id).encode()),
                                ("width", str(w).encode()), ("height", str(h).encode())]
                     send("image-frames", d.id, jpeg, headers)
+                    x, y = d.position_m()
+                    for label, pe, pn, plat, plon in people:
+                        de, dn = pe - x, pn - y
+                        if abs(de) > a.footprint_m or abs(dn) > a.footprint_m * h / w:
+                            continue
+                        conf = round(rnd.uniform(0.55, 0.95), 3)
+                        u = w / 2 + de / a.footprint_m * w / 2
+                        v = h / 2 - dn / (a.footprint_m * h / w) * h / 2
+                        det = {"schema_version": 1, "drone_id": d.id, "frame_id": d.frame_id, "ts_us": ts_us,
+                               "model_version": "sim", "image_w": w, "image_h": h,
+                               "objects": [{"class": "person", "conf": conf,
+                                            "bbox_xyxy": [max(0.0, u - 15), max(0.0, v - 15), u + 15, v + 15],
+                                            "center_uv": [round(u, 1), round(v, 1)]}]}
+                        send("detections", d.id, json.dumps(det).encode())
+                        slat, slon = offset_latlon(plat, plon, rnd.gauss(0, 1.0), rnd.gauss(0, 1.0))
+                        sv = {"schema_version": 1, "detection_id": str(uuid.uuid4()), "mission_id": mission_id,
+                              "drone_id": d.id, "frame_id": d.frame_id, "ts_us": ts_us,
+                              "lat": round(slat, 8), "lon": round(slon, 8), "conf": conf,
+                              "pose_dt_ms": round(rnd.uniform(0, 50), 1), "snapshot_path": None}
+                        send("survivors", d.id, json.dumps(sv).encode())
                     d.frame_id += 1
             poll()
             tick += 1
