@@ -9,3 +9,6 @@ __pycache__/
 .env
 # telemetry bags (docker/compose.*.yml -> ./data)
 docker/data/
+senoir
+senoir.pub
+pass

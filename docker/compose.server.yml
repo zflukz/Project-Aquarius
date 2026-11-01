@@ -10,7 +10,7 @@
 # Telemetry / camera (service telemetry, details: telemetry_plan.md):
 #   camera in the browser  http://<VM_IP>:8083/          (needs a camera model, e.g. gz_x500_mono_cam_down)
 #   dashboard (Grafana)    http://<VM_IP>:3000   (admin / GRAFANA_ADMIN_PASSWORD from .env)
-#     PX4 MAVLink -> telemetry (mavlink_mqtt.py) -> mosquitto :1883 -> telegraf -> influxdb (127.0.0.1:8086) -> grafana
+#     PX4 MAVLink -> telemetry (mavlink_mqtt.py) -> mosquitto :1883 -> telegraf -> timescaledb (127.0.0.1:5432) -> grafana
 #   raw MQTT               mosquitto_sub -h <VM_IP> -t 'aquarius/#' -v
 # Needs Docker Compose >= 2.23.1 (inline `configs: content`).
 #   ROS 2 on the VM        docker exec telemetry with-ros ros2 topic list
@@ -96,7 +96,7 @@ services:
     stop_grace_period: 10s
     restart: unless-stopped
 
-  # --- dashboard: MQTT -> Telegraf -> InfluxDB -> Grafana (communication_plan.md §4, §7), all host network
+  # --- dashboard: MQTT -> Telegraf -> TimescaleDB -> Grafana (communication_plan.md §4, §7), all host network
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: mosquitto
@@ -107,21 +107,30 @@ services:
         mode: 0444
     restart: unless-stopped
 
-  influxdb:
-    image: influxdb:2.7
-    container_name: influxdb
+  timescaledb:
+    image: timescale/timescaledb:2.22.1-pg17
+    container_name: timescaledb
     network_mode: host
+    # SQL on the VM only (ssh -L 5432:127.0.0.1:5432 for psql / a DB tool); TSDB_PORT if 5432 is taken
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=${TSDB_PORT:-5432}"]
     environment:
-      - INFLUXD_HTTP_BIND_ADDRESS=127.0.0.1:8086   # VM only (ssh -L 8086:127.0.0.1:8086 for the UI)
-      - DOCKER_INFLUXDB_INIT_MODE=setup     # first start only (empty volume)
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:-aquarius-admin}
-      - DOCKER_INFLUXDB_INIT_ORG=aquarius
-      - DOCKER_INFLUXDB_INIT_BUCKET=aquarius
-      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUX_RETENTION:-30d}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+      - POSTGRES_USER=aquarius              # user / password / DB: first start only (empty volume)
+      - POSTGRES_PASSWORD=${TSDB_PASSWORD:-aquarius-admin}
+      - POSTGRES_DB=aquarius
+      - TIMESCALEDB_TELEMETRY=off
+      - TS_TUNE_MEMORY=${TSDB_MEMORY:-1GB}    # timescaledb-tune: don't size for the whole VM (Gazebo needs it)
+      - TS_TUNE_NUM_CPUS=2
+    configs:
+      - source: timescaledb_init
+        target: /docker-entrypoint-initdb.d/zz-aquarius.sql
+        mode: 0444
     volumes:
-      - influxdb-data:/var/lib/influxdb2
+      - timescaledb-data:/var/lib/postgresql/data
+    healthcheck:                            # TCP: the init server (first start) only listens on the socket
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p ${TSDB_PORT:-5432} -U aquarius -d aquarius"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     restart: unless-stopped
 
   telegraf:
@@ -130,15 +139,17 @@ services:
     network_mode: host
     environment:
       - MQTT_SERVER=tcp://127.0.0.1:1883
-      - INFLUX_URL=http://127.0.0.1:8086
-      - INFLUX_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+      - TSDB_DSN=host=127.0.0.1 port=${TSDB_PORT:-5432} user=aquarius password=${TSDB_PASSWORD:-aquarius-admin} dbname=aquarius sslmode=disable
+      - TSDB_RETENTION=${TSDB_RETENTION-30d}
     configs:
       - source: telegraf_conf
         target: /etc/telegraf/telegraf.conf
         mode: 0444                          # telegraf runs as user telegraf
     depends_on:
-      - mosquitto
-      - influxdb
+      mosquitto:
+        condition: service_started
+      timescaledb:
+        condition: service_healthy
     restart: unless-stopped
 
   grafana:
@@ -147,17 +158,17 @@ services:
     network_mode: host                      # dashboard: http://<VM_IP>:3000
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - INFLUX_URL=http://127.0.0.1:8086
-      - INFLUX_TOKEN=${INFLUX_TOKEN:-aquarius-dev-token}
+      - TSDB_HOST=127.0.0.1:${TSDB_PORT:-5432}
+      - TSDB_PASSWORD=${TSDB_PASSWORD:-aquarius-admin}
     volumes:
       - grafana-data:/var/lib/grafana
     depends_on:
-      - influxdb
+      - timescaledb
     restart: unless-stopped
 
 volumes:
   gz-fuel-cache:
-  influxdb-data:                            # flight history (INFLUX_RETENTION)
+  timescaledb-data:                         # flight history (TSDB_RETENTION)
   grafana-data:
 
 # Same text in compose.local.yml — keep both in sync. $$ = literal $ (Telegraf reads the env itself).
@@ -172,7 +183,7 @@ configs:
       persistence false
   telegraf_conf:
     content: |
-      # MQTT aquarius/<fleet>/drone/<i>/<stream> {"t": ms, ...} -> InfluxDB measurement <stream>, tags fleet + drone
+      # MQTT aquarius/<fleet>/drone/<i>/<stream> {"t": ms, ...} -> TimescaleDB table <stream>, columns time, fleet, drone, fields
       [agent]
         interval = "1s"
         flush_interval = "1s"
@@ -191,8 +202,26 @@ configs:
           topic = "aquarius/+/drone/+/+"
           measurement = "_/_/_/_/measurement"
           tags = "_/fleet/_/drone/_"
-      [[outputs.influxdb_v2]]
-        urls = ["$${INFLUX_URL}"]
-        token = "$${INFLUX_TOKEN}"
-        organization = "aquarius"
-        bucket = "aquarius"
+      [[outputs.postgresql]]
+        connection = "$${TSDB_DSN}"
+        timestamp_column_type = "timestamp with time zone"
+        # new stream -> table + hypertable / index / retention (aquarius_hypertable from timescaledb_init)
+        create_templates = [
+          '''CREATE TABLE {{ .table }} ({{ .columns }})''',
+          '''SELECT aquarius_hypertable({{ .table|quoteLiteral }}, '$${TSDB_RETENTION}')''',
+        ]
+  timescaledb_init:
+    content: |
+      -- runs once on an empty timescaledb-data volume
+      CREATE EXTENSION IF NOT EXISTS timescaledb;
+      -- Telegraf calls this right after creating a stream's table (position, status, battery, ...)
+      CREATE OR REPLACE FUNCTION aquarius_hypertable(tbl regclass, retention text) RETURNS void
+      LANGUAGE plpgsql AS $$body$$
+      BEGIN
+        PERFORM create_hypertable(tbl, by_range('time', INTERVAL '1 day'), migrate_data => true);
+        EXECUTE format('CREATE INDEX ON %s (fleet, drone, time DESC)', tbl);   -- "last value per drone"
+        IF coalesce(retention, '') NOT IN ('', '0') THEN                      -- '' / 0 = keep forever
+          PERFORM add_retention_policy(tbl, retention::interval);
+        END IF;
+      END
+      $$body$$;

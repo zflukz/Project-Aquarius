@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 #   ros_gz_bridge    Gazebo sensors / camera -> ROS 2   (C3)
 #   ground_truth.py  true pose per drone -> /uav_i/gz/ground_truth   (T5)
 #   web_video_server camera in the browser (MJPEG)
-#   mavlink_mqtt.py  MAVLink telemetry of every drone -> MQTT -> Telegraf -> InfluxDB -> Grafana
+#   mavlink_mqtt.py  MAVLink telemetry of every drone -> MQTT -> Telegraf -> TimescaleDB -> Grafana
 #   rosbag2 (mcap)   record an experiment (T4)
 # Runs in px4-sim's network namespace — it needs no change to the px4-sim image.
 

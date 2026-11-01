@@ -6,7 +6,7 @@
     "px4",
     "mavlink"
   ],
-  "description": "PX4 MAVLink -> mavlink_mqtt.py -> MQTT -> Telegraf -> InfluxDB. docker/communication_plan.md",
+  "description": "PX4 MAVLink -> mavlink_mqtt.py -> MQTT -> Telegraf -> TimescaleDB. docker/communication_plan.md",
   "editable": true,
   "graphTooltip": 1,
   "refresh": "2s",
@@ -31,14 +31,14 @@
       {
         "type": "query",
         "datasource": {
-          "type": "influxdb",
-          "uid": "aquarius-influx"
+          "type": "grafana-postgresql-datasource",
+          "uid": "aquarius-tsdb"
         },
         "refresh": 2,
         "includeAll": false,
         "multi": false,
-        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"aquarius\", tag: \"fleet\")",
-        "definition": "schema.tagValues(bucket: \"aquarius\", tag: \"fleet\")",
+        "query": "SELECT DISTINCT fleet FROM \"online\" WHERE time > now() - interval '30 days'",
+        "definition": "SELECT DISTINCT fleet FROM \"online\" WHERE time > now() - interval '30 days'",
         "sort": 3,
         "name": "fleet",
         "label": "Fleet",
@@ -50,15 +50,15 @@
       {
         "type": "query",
         "datasource": {
-          "type": "influxdb",
-          "uid": "aquarius-influx"
+          "type": "grafana-postgresql-datasource",
+          "uid": "aquarius-tsdb"
         },
         "refresh": 2,
         "includeAll": true,
         "multi": true,
-        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"aquarius\", tag: \"drone\", predicate: (r) => r.fleet == \"${fleet}\", start: -30d)",
-        "definition": "schema.tagValues(bucket: \"aquarius\", tag: \"drone\")",
-        "sort": 3,
+        "query": "SELECT drone FROM (SELECT DISTINCT drone FROM \"online\" WHERE fleet = '$fleet' AND time > now() - interval '30 days') d ORDER BY drone::int",
+        "definition": "SELECT drone FROM (SELECT DISTINCT drone FROM \"online\" WHERE fleet = '$fleet' AND time > now() - interval '30 days') d ORDER BY drone::int",
+        "sort": 0,
         "name": "drone",
         "label": "Drones",
         "current": {
@@ -73,15 +73,15 @@
       {
         "type": "query",
         "datasource": {
-          "type": "influxdb",
-          "uid": "aquarius-influx"
+          "type": "grafana-postgresql-datasource",
+          "uid": "aquarius-tsdb"
         },
         "refresh": 2,
         "includeAll": false,
         "multi": false,
-        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"aquarius\", tag: \"drone\", predicate: (r) => r.fleet == \"${fleet}\", start: -30d)",
-        "definition": "schema.tagValues(bucket: \"aquarius\", tag: \"drone\")",
-        "sort": 3,
+        "query": "SELECT drone FROM (SELECT DISTINCT drone FROM \"online\" WHERE fleet = '$fleet' AND time > now() - interval '30 days') d ORDER BY drone::int",
+        "definition": "SELECT drone FROM (SELECT DISTINCT drone FROM \"online\" WHERE fleet = '$fleet' AND time > now() - interval '30 days') d ORDER BY drone::int",
+        "sort": 0,
         "name": "camdrone",
         "label": "Camera drone",
         "current": {
@@ -138,10 +138,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"online\" and r._field == \"online\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  // no message for 5 s (bridge / PX4 gone) = offline\n  |> map(fn: (r) => ({r with _value: if int(v: now()) - int(v: r._time) > 5000000000 then 0.0 else r._value}))\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  -- no message for 5 s (bridge / PX4 gone) = offline\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, CASE WHEN time < now() - interval '5 seconds' THEN 0 ELSE online END AS value\n  FROM \"online\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND online IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -204,8 +207,8 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -216,10 +219,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"status\" and r._field == \"armed\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, armed AS value\n  FROM \"status\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND armed IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -282,8 +288,8 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -294,10 +300,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"status\" and r._field == \"mode\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT drone, value FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, mode AS value\n  FROM \"status\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND mode IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY length(drone), drone"
         }
       ],
       "fieldConfig": {
@@ -343,9 +352,23 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
-      }
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "drone"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ]
     },
     {
       "type": "stat",
@@ -355,10 +378,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"battery\" and r._field == \"pct\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, pct AS value\n  FROM \"battery\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND pct IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -417,8 +443,8 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -429,10 +455,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1m)\n  |> filter(fn: (r) => r._measurement == \"position\" and r._field == \"alt_rel\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, alt_rel AS value\n  FROM \"position\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 minute' AND alt_rel IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -479,8 +508,8 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -491,10 +520,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"gps\" and r._field == \"sats\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, sats AS value\n  FROM \"gps\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND sats IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -549,8 +581,8 @@
         "h": 5
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -574,18 +606,24 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"position\" and (r._field == \"lat\" or r._field == \"lon\") and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, lat: r.lat, lon: r.lon, drone: int(v: r.drone)}))\n  |> group()\n  |> sort(columns: [\"_time\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), drone::int AS drone, last(lat, time) AS lat, last(lon, time) AS lon\nFROM \"position\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND lat IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         },
         {
           "refId": "B",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"position\" and (r._field == \"lat\" or r._field == \"lon\" or r._field == \"alt_rel\") and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, lat: r.lat, lon: r.lon, alt_rel: r.alt_rel, drone: int(v: r.drone)}))\n  |> group()"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT DISTINCT ON (drone::int) time, lat, lon, alt_rel, drone::int AS drone\nFROM \"position\"\nWHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND lat IS NOT NULL\nORDER BY drone::int, time DESC"
         }
       ],
       "fieldConfig": {
@@ -794,8 +832,8 @@
         "h": 14
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -814,8 +852,8 @@
         "h": 14
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -839,10 +877,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"position\" and r._field == \"alt_rel\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(alt_rel) AS value\nFROM \"position\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND alt_rel IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1009,8 +1050,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -1021,10 +1062,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"position\" and r._field == \"speed\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(speed) AS value\nFROM \"position\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND speed IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1192,8 +1236,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -1204,10 +1248,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"position\" and r._field == \"climb\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(climb) AS value\nFROM \"position\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND climb IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1374,8 +1421,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -1385,10 +1432,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"status\" and r._field == \"mode\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, last(mode, time) AS mode\nFROM \"status\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND mode IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1477,9 +1527,23 @@
         "h": 6
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
-      }
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "drone"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ]
     },
     {
       "type": "timeseries",
@@ -1489,10 +1553,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mission\" and r._field == \"seq\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, last(seq, time) AS value\nFROM \"mission\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND seq IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1660,8 +1727,8 @@
         "h": 6
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -1685,10 +1752,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"battery\" and r._field == \"pct\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(pct) AS value\nFROM \"battery\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND pct IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1870,8 +1940,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -1882,10 +1952,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"battery\" and r._field == \"voltage\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(voltage) AS value\nFROM \"battery\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND voltage IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2052,8 +2125,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2064,10 +2137,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"gps\" and r._field == \"eph\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone AS drone, avg(eph) AS value\nFROM \"gps\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) AND eph IS NOT NULL\nGROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2235,8 +2311,8 @@
         "h": 8
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2247,10 +2323,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"health\" and r._field == \"all_ok\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, all_ok AS value\n  FROM \"health\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND all_ok IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -2313,8 +2392,8 @@
         "h": 4
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2325,10 +2404,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"health\" and r._field == \"load\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, load AS value\n  FROM \"health\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND load IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -2379,8 +2461,8 @@
         "h": 4
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2391,10 +2473,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"gps\" and r._field == \"fix_type\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\", \"drone\"])\n  |> map(fn: (r) => ({r with drone: \"drone \" + r.drone}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT * FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, fix_type AS value\n  FROM \"gps\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 hour' AND fix_type IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -2482,8 +2567,8 @@
         "h": 4
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2494,10 +2579,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: -1d)\n  |> filter(fn: (r) => r._measurement == \"mission\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> last()\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, drone: \"drone \" + r.drone,\n       _value: if r.total > 0.0 then string(v: int(v: r.seq) + 1) + \" / \" + string(v: int(v: r.total)) else \"-\"}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT drone, value FROM (\n  SELECT DISTINCT ON (drone::int) time, 'drone ' || drone AS drone, CASE WHEN total > 0 THEN (seq::int + 1) || ' / ' || total::int ELSE '-' END AS value\n  FROM \"mission\"\n  WHERE fleet = '$fleet' AND drone IN ($drone) AND time > now() - interval '1 day' AND seq IS NOT NULL\n  ORDER BY drone::int, time DESC\n) s ORDER BY length(drone), drone"
         }
       ],
       "fieldConfig": {
@@ -2543,9 +2631,23 @@
         "h": 4
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
-      }
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "drone"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ]
     },
     {
       "type": "row",
@@ -2567,10 +2669,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"event\" and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({Time: r._time, Drone: \"drone \" + r.drone, Severity: int(v: r.severity), Message: r.text}))\n  |> group()\n  |> sort(columns: [\"Time\"], desc: true)\n  |> limit(n: 200)"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT time AS \"Time\", 'drone ' || drone AS \"Drone\", severity::int AS \"Severity\", \"text\" AS \"Message\"\nFROM \"event\"\nWHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone)\nORDER BY time DESC\nLIMIT 200"
         }
       ],
       "fieldConfig": {
@@ -2689,8 +2794,8 @@
         "h": 10
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     },
     {
@@ -2701,10 +2806,13 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "influxdb",
-            "uid": "aquarius-influx"
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
           },
-          "query": "from(bucket: \"aquarius\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"attitude\" and (r._field == \"roll\" or r._field == \"pitch\") and r.fleet == \"${fleet}\" and contains(value: r.drone, set: ${drone:json}))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: r._value, drone: \"drone \" + r.drone + \" \" + r._field}))\n  |> group(columns: [\"drone\"])"
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone || ' roll' AS drone, avg(roll) AS value\nFROM \"attitude\" WHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) GROUP BY 1, drone\nUNION ALL\nSELECT $__timeGroupAlias(time, $__interval), 'drone ' || drone || ' pitch' AS drone, avg(pitch) AS value\nFROM \"attitude\" WHERE $__timeFilter(time) AND fleet = '$fleet' AND drone IN ($drone) GROUP BY 1, drone\nORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2889,8 +2997,8 @@
         "h": 10
       },
       "datasource": {
-        "type": "influxdb",
-        "uid": "aquarius-influx"
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
       }
     }
   ]

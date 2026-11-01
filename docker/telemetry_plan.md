@@ -13,7 +13,7 @@ Gazebo Harmonic 8.15, gz-gui 8.4, model `gz_x500`, world `baylands`) on 2026-10-
 > (part of **T4**). See **§4**. Still open: T3 (DDS VM ↔ control), C2, C4.
 >
 > **2026-10-18:** T1 + T4 done the [`communication_plan.md`](communication_plan.md) way: MAVLink → `mavlink_mqtt.py`
-> → MQTT → Telegraf → InfluxDB → **Grafana** :3000 (dashboard, history). Foxglove (`foxglove_bridge`, :8765) **removed**.
+> → MQTT → Telegraf → TimescaleDB → **Grafana** :3000 (dashboard, history). Foxglove (`foxglove_bridge`, :8765) **removed**.
 
 ```
  Gazebo (sensors, ground truth, camera)
@@ -136,7 +136,7 @@ Simulated by PX4 `battery_simulator`: drains over time, never below `SIM_BAT_MIN
 | **T1** | `Drone-Control/telemetry_bridge.py`: one MAVSDK `System(port=50051+i)` per drone (like `mcpp_mission.py`), subscribe the D list, set rates, write JSON lines `{drone_id, t, topic, data}` to stdout + `/data/telemetry-<date>.jsonl` (volume) and push to the server (MQTT or WebSocket) | drone-control | script only — works local, split and with real drones |
 | **T2** | full uORB over ROS 2: build `Micro-XRCE-DDS-Agent` (v2.4.x) into px4-sim, start `MicroXRCEAgent udp4 -p 8888` in `entrypoint.sh` (one agent for all instances); build `px4_msgs` (same PX4 commit) with colcon into drone-control; extend `dds_topics.yaml` for raw baro/mag/gps if needed | both images | rebuild both |
 | **T3** | DDS across VM ↔ control: multicast usually blocked → Fast DDS discovery server (`fastdds discovery -i 0 -p 11811` on VM, `ROS_DISCOVERY_SERVER=<VM_IP>:11811` both sides) or unicast peers; same `ROS_DOMAIN_ID`; open DDS UDP ports | compose + firewall | env only |
-| **T4** | server: `telemetry-server` service subscribes (T1 JSON / T2 ROS 2) → TimescaleDB or InfluxDB → Grafana dashboard + REST/WebSocket for a web UI; `ros2 bag record` (mcap) per experiment | new compose service | new image |
+| **T4** | server: `telemetry-server` service subscribes (T1 JSON / T2 ROS 2) → TimescaleDB → Grafana dashboard + REST/WebSocket for a web UI; `ros2 bag record` (mcap) per experiment | new compose service | new image |
 | **T5** | ground truth for evaluation (MCPP coverage, position error): read `/world/<world>/dynamic_pose/info` in px4-sim (Python `gz.transport13`, no ROS needed) → same JSON format as T1 | px4-sim | script + entrypoint option |
 
 Order: T1 → T5 → T4 → T2 + T3 (only when raw sensors at full rate or ROS 2 algorithms are needed).
@@ -146,7 +146,7 @@ Done 2026-10-17 (§4): **T2**, **T5** (ROS topic `/uav_i/gz/ground_truth`, `grou
 Open question: "server" = the VM running px4-sim, or a separate backend (DB / web)? T4 placement depends on it.
 
 **2026-10-17:** T1 + T4 are replaced by [`communication_plan.md`](communication_plan.md): MAVLink → MQTT (`mavlink_mqtt.py`)
-→ Telegraf → InfluxDB → Grafana, Kafka optional.
+→ Telegraf → TimescaleDB → Grafana, Kafka optional.
 
 ---
 

@@ -15,7 +15,7 @@ a separate computer, later real drones.
 | `Drone-Control/` | `flight_test.py`, `teleop_drone.py`, `mcpp_mission.py`, `mission_cli.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
 | `AQUARIUS_CLI.md` | user guide for the `aquarius` command (`scripts/aquarius`): every command, option, example, troubleshooting |
-| `scripts/` | `aquarius` CLI (init / start mission LAT,LON / coverage / status / rtl / land); **native** (non-Docker) install / run / uninstall — same software + ports as the images |
+| `scripts/` | `aquarius` CLI (init / drones N / update / start mission LAT,LON / coverage / status / rtl / land); **native** (non-Docker) install / run / uninstall — same software + ports as the images |
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |
 | `Robomaster-TT/`, `InfoData/` | side experiments / Obsidian notes |
 
@@ -36,8 +36,8 @@ Three modes, same four images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + influxdb (127.0.0.1:8086) + telegraf + grafana (3000) + drone-control on one bridge network; also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / influxdb / telegraf / grafana (3000), `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + timescaledb (127.0.0.1:5432) + telegraf + grafana (3000) + drone-control on one bridge network; also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / timescaledb / telegraf / grafana (3000), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -136,7 +136,7 @@ built + loaded (`server.config`) → RTP/H.264 UDP to `PX4_VIDEO_HOST_IP:5600+i`
 x264/rtp/udp GStreamer plugins present. **C2** save geo-tagged frames via `gz.transport13`. **C3**
 `ros_gz_bridge` → ROS 2 Image (with T2/T3, compress). **C4** `ffmpeg x11grab :99` records the scene view.
 **Since 2026-10-17 T2, T5 (ROS topic), C3 + browser camera / bag are implemented** in the `telemetry` service (change log below);
-**since 2026-10-18 T1 + T4 as MAVLink → MQTT → InfluxDB → Grafana** (Foxglove removed); T3, C1, C2, C4 still open.
+**since 2026-10-18 T1 + T4 as MAVLink → MQTT → TimescaleDB → Grafana** (Foxglove removed); T3, C1, C2, C4 still open.
 
 ## Change log — telemetry service: topics + camera view on the server (2026-10-17)
 
@@ -243,12 +243,12 @@ Implements `docker/communication_plan.md` M1 + M2. Details: `docker/README.md` �
 - **Foxglove removed**: `ros-jazzy-foxglove-bridge`, `FOXGLOVE_PORT`, port 8765 (Dockerfile, entrypoint, compose,
   `.env.example`, CLI, native install, docs). Changing the apt line invalidates the ROS layer → full telemetry rebuild.
 - New services in `compose.local.yml` / `compose.server.yml`: `mosquitto` (eclipse-mosquitto:2, anonymous, no
-  persistence), `influxdb` (2.7, setup mode, org/bucket `aquarius`, `INFLUX_RETENTION` 30d; VM binds 127.0.0.1),
-  `telegraf` (1.36, `mqtt_consumer` + `topic_parsing` → measurement = stream, tags fleet / drone, `json_time_key=t`),
+  persistence), database (TimescaleDB since 2026-10-31, see below; VM binds 127.0.0.1),
+  `telegraf` (1.36, `mqtt_consumer` + `topic_parsing` → table = stream, columns fleet / drone, `json_time_key=t`),
   `grafana` (new image **`aquarius-grafana`** = `grafana/grafana:12.2.0` + provisioning; VM stays pull-only).
   Mosquitto / Telegraf configs inline (`configs: content`, Compose ≥ 2.23.1, **`mode: 0444`** — default 0400 →
   telegraf "permission denied"); same text in both compose files.
-- **Dashboard** `docker/grafana/dashboards/aquarius.json` (uid `aquarius-fleet`, home page, Flux): stat row (link
+- **Dashboard** `docker/grafana/dashboards/aquarius.json` (uid `aquarius-fleet`, home page, SQL): stat row (link
   online if a message < 5 s old, armed, mode, battery, altitude, sats), geomap (Esri satellite, track + last
   position), camera (HTML `<img>` MJPEG from `${cam}` textbox variable — browser-side, so off the VM set
   `var-cam=http://<VM_IP>:8083`), altitude / ground speed / climb, mode state timeline, mission waypoint, battery % /
@@ -257,12 +257,12 @@ Implements `docker/communication_plan.md` M1 + M2. Details: `docker/README.md` �
   `reduceOptions.fields: "/^drone /"` (matched against the display name). Unit `lengthm` auto-scales to mm → `suffix: m`.
 - CLI: `aquarius urls` prints Grafana (with `var-cam`), `status` lists the dashboard containers.
 - Native: `install_telemetry_server.sh` pip-installs pymavlink / paho, no foxglove; `run_telemetry_native.sh` sets
-  `MQTT_SCRIPT`; broker / DB / Grafana only as containers (`compose.server.yml up -d mosquitto influxdb telegraf grafana`).
+  `MQTT_SCRIPT`; broker / DB / Grafana only as containers (`compose.server.yml up -d mosquitto timescaledb telegraf grafana`).
 
 Verified 2026-10-18 (`compose.local.yml`, Docker Desktop, `gz_x500_mono_cam_down`, `HEADLESS=1 QGC=0`; px4-sim /
 telemetry first with the new scripts `docker cp`'d into the old images + pip in the container): PX4 log
 `udp port 14740 remote port 14700`; `mosquitto_sub` rates position / attitude 10 Hz, status / battery / gps / health /
-online 1 Hz; InfluxDB has all measurements with tags fleet=sim, drone=0; Grafana datasource health OK, all 22 panel
+online 1 Hz; the database had all streams for fleet=sim, drone=0; Grafana datasource health OK, all 22 panel
 queries OK via `/api/ds/query`; two `aquarius start coverage --size 30x20` flights **PASSED** with the bridge's GCS
 heartbeat on the link; headless-Chrome screenshot: every panel filled (ONLINE, LOITER, 100 %, map track over
 Baylands, camera image, mode timeline TAKEOFF/MISSION/RTL/LOITER, mission 19 / 19, events "Landing detected").
@@ -274,6 +274,70 @@ Load (6 vCPU / 7.7 GB WSL, mono_cam_down, telemetry on, RTF over 30 s): `HEADLES
 RTF 0.89, ~465 %. Both noVNC screens render (screenshots), QGC Ready / Hold. Slow sim time with GUI = CPU limit, not a bug.
 Not tested: `compose.server.yml` on the VM, `PX4_NUM_DRONES>1` (several drones on one socket), native scripts,
 real browser login flow, images not pushed.
+
+## Change log — server workflow: `aquarius drones` / `update` (2026-10-31)
+
+User: local stack works, server / control docs + workflow lagged behind; wants to run compose on the VM, update it
+and pick the drone count there, with Grafana on the server. Compose files themselves were already in sync
+(server = local stack minus build / drone-control, host network) — Grafana stack stays in `compose.server.yml`.
+
+- **`aquarius drones [N]`**: shows / sets `PX4_NUM_DRONES` + `NUM_DRONES` (1–10) in `.env`, then
+  `up -d --force-recreate px4-sim telemetry` (telemetry builds topics / camera bridge / MQTT per drone — docs used
+  to say recreate only px4-sim) and waits for the last drone.
+- **`aquarius update [mode] [--no-files]`**: server / control: `git pull --ff-only` if inside this repo, else raw
+  GitHub download of `compose.<mode>.yml`, `.env.example` and a copy of `aquarius` next to them
+  (`AQUARIUS_BRANCH`, default main) → `pull` → `up -d --remove-orphans` → `image prune -f` → wait. Local: `up -d --build`,
+  no git. `.env` never touched; keys new in `.env.example` are listed.
+- `init` saves **`AQUARIUS_MODE`** in `.env`; `detect_mode` = running compose project label → `AQUARIUS_MODE` → files
+  present. Needed because a VM repo clone also has `compose.local.yml` (`update` would otherwise build).
+- `DOCKER_DIR` also = script dir when `compose.*.yml` sits next to the script (VM folder without the repo);
+  git pull only when the git toplevel has `scripts/aquarius` (scratch dir inside another repo hit `git pull HEAD`).
+- `urls` on host network prints `hostname -I` instead of `<VM_IP>`; `init server` warns if `CONTROL_HOST` is still
+  the example `192.168.1.50`; wait timeout scales with the drone count.
+- Docs: `docker/README.md` ③ ("What runs where", clone or scp, `drones`, `update`), `WORKFLOW.md` 0 / 1b / 1c / 2,
+  `AQUARIUS_CLI.md` (commands, `drones`, `update`, troubleshooting), `.env.example`. **WORKFLOW 1b pushed no
+  `grafana` image** → fixed (VM pull of `aquarius-grafana` would fail).
+
+Tested (Git Bash, Docker Desktop stopped): `bash -n`; `drones` show / `11` rejected / `3` writes both keys;
+`AQUARIUS_MODE=server` folder with all compose files → `update` picks server; missing-key hint; raw GitHub
+download → **404 on main and on feature-Network-flukez (repo private)** → warns, keeps files. GHCR
+`docker manifest inspect` → `denied` for all four images (private or not pushed). Not tested: anything with
+Docker running, a real VM.
+
+## Change log — TimescaleDB as the dashboard database (2026-10-31)
+
+User asked to store the dashboard data in TimescaleDB. MQTT / Telegraf / Grafana stay.
+
+- Service **`timescaledb`** (`timescale/timescaledb:2.22.1-pg17`, user / DB `aquarius`, `TSDB_PASSWORD`) in both
+  compose files; local `127.0.0.1:5432`, VM host network with `listen_addresses=127.0.0.1`,
+  `TSDB_PORT` if 5432 is taken. `TS_TUNE_MEMORY=${TSDB_MEMORY:-1GB}` (image's timescaledb-tune would size Postgres
+  for the whole host), telemetry off, healthcheck `pg_isready -h 127.0.0.1` (init server listens only on the socket)
+  → telegraf `depends_on: service_healthy`. Volume `timescaledb-data`.
+- Telegraf `outputs.postgresql` (`TSDB_DSN` key/value DSN, `timestamptz`): one table per stream, columns `time`,
+  `fleet`, `drone` (text) + fields (double / text, new fields → `ALTER TABLE ADD COLUMN`). `create_templates` calls
+  **`aquarius_hypertable(tbl, retention)`** from the inline config `timescaledb_init` (→ `/docker-entrypoint-initdb.d/zz-aquarius.sql`,
+  plpgsql body quoted `$$body$$` in compose = `$body$`): hypertable 1-day chunks, index `(fleet, drone, time DESC)`,
+  `add_retention_policy` unless `TSDB_RETENTION` is ''/0.
+- Grafana: datasource `provisioning/datasources/timescaledb.yml` (`grafana-postgresql-datasource`, uid `aquarius-tsdb`,
+  `timescaledb: true`); Dockerfile env `TSDB_*`.
+- Dashboard: all 22 queries in SQL (converter kept the panel layout / overrides). Numbers: format time_series
+  with a text column `drone` → Grafana turns string columns into labels → existing `displayName ${__field.labels.drone}`
+  and stat filter `/^drone /` keep working. Stats = `DISTINCT ON (drone::int) … ORDER BY drone::int, time DESC`
+  wrapped in `ORDER BY time` (long→wide needs ascending time). Strings (mode stat, mode timeline, mission progress):
+  format table + `partitionByValues` (drone, asLabels); the two **string stats must not return `time`** (it got the
+  "drone i" display name too and showed up as 4 tiny values). Time series `$__timeGroupAlias` + `avg` / `last(x, time)`.
+  Variables: `SELECT DISTINCT … FROM "online"`, drones sorted `drone::int`. Tables quoted (`"position"` is a keyword).
+- `.env.example` (`TSDB_PASSWORD`, `TSDB_RETENTION`, `TSDB_MEMORY`, `TSDB_PORT`), CLI `status`,
+  native scripts' hints, telemetry comments, docs (README dashboard section + env table, WORKFLOW, AQUARIUS_CLI,
+  communication_plan note, telemetry_plan). The old database's container, image, volume and every mention were
+  deleted on request (git history has them).
+
+Verified 2026-10-31 (local, Docker Desktop, dashboard stack only — px4-sim / telemetry not running): grafana image
+rebuilt; init script ran (`CREATE FUNCTION`), TimescaleDB 2.22.1, `shared_buffers` 256MB; fake `mavlink_mqtt.py`
+streams for 2 drones (mosquitto_pub, 2 Hz) → 9 hypertables with index + 30-day retention jobs; all 22 panel queries +
+3 variables OK via `/api/ds/query`; headless-Chrome screenshot of the dashboard: every panel filled (ONLINE / ARMED /
+MISSION / battery / alt / sats, map track, series, mode timeline, events, roll / pitch, mission `4 / 14`); after
+stopping the publisher Link → OFFLINE (0) after 5 s. Not tested: real PX4 flight into TimescaleDB, `compose.server.yml` on the VM, image not pushed.
 
 ## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
 
@@ -445,7 +509,7 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 - Local: after recreating/restarting px4-sim also `restart telemetry` (`service:px4-sim` netns is not re-joined).
 - `CONTROL_HOST` is resolved once at container start; if the control computer's IP changes, recreate `px4-sim`.
 - noVNC / x11vnc / web_video_server / Mosquitto have no password — keep 8081-8083 / 1883 / 9001 / 3000 on LAN / VPN only.
-  Grafana default login admin/admin and InfluxDB dev token → set `GRAFANA_ADMIN_PASSWORD` / `INFLUX_*` in `.env` on the VM
+  Grafana default login admin/admin and TimescaleDB dev password → set `GRAFANA_ADMIN_PASSWORD` / `TSDB_PASSWORD` in `.env` on the VM
   before the first start (only applied to empty volumes).
 - GHCR packages are private by default → make public or `docker login` on the VM.
 - Raw-GitHub `curl` of `compose.server.yml` works only after these files are on `main` and the repo is public.

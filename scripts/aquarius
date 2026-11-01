@@ -3,6 +3,9 @@
 #
 #   aquarius init [local|server|control] [--drones N] [--world W] [--camera] [--headless]
 #                 [--control-host IP] [--build]
+#   aquarius drones [N]                  show / change the number of simulated drones (1-10), restarts the sim
+#   aquarius update [local|server|control] [--no-files]
+#                                        newest compose files + images, restart what changed (VM: pull only)
 #   aquarius start mission LAT,LON [LAT,LON ...] [--drone N] [--alt M] [--speed V] [--max-dist M] [--detach]
 #   aquarius start coverage [LAT,LON] [--size WxH] [--drones N] [--sweep M] [--alt M] [--detach]
 #   aquarius status [--drone N]          containers + armed / mode / battery / position
@@ -23,13 +26,15 @@
 # Ctrl+C only stops following the log — the drone keeps flying. Stop it with `aquarius rtl` / `land`.
 # Mode: Docker if the drone-control container runs, else native (scripts/install_control_computer.sh).
 # Env: AQUARIUS_DOCKER_DIR (compose files + .env, default <repo>/docker or the current directory)
+#      AQUARIUS_BRANCH (update without git: raw GitHub files from this branch, default main)
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 if [ -n "$AQUARIUS_DOCKER_DIR" ]; then DOCKER_DIR=$AQUARIUS_DOCKER_DIR
 elif [ -f "$REPO_DIR/docker/compose.local.yml" ]; then DOCKER_DIR=$REPO_DIR/docker
-else DOCKER_DIR=$PWD; fi       # VM: only compose.server.yml + .env next to this script
+elif ls "$SCRIPT_DIR"/compose.*.yml > /dev/null 2>&1; then DOCKER_DIR=$SCRIPT_DIR   # VM: copy next to compose.server.yml
+else DOCKER_DIR=$PWD; fi
 DC_DIR=/drone-control           # Drone-Control/ inside the drone-control image
 NATIVE_PY=$REPO_DIR/Drone-Control/.venv/bin/python
 export MSYS_NO_PATHCONV=1       # Git Bash: keep /tmp/... paths for docker exec
@@ -43,7 +48,7 @@ use_docker() { running drone-control; }
 
 # --- options shared by the commands
 DRONE=${DRONE_ID:-0}; ALT=; SPEED=; MAXDIST=; DETACH=; SIZE=; SWEEP=; NDRONES=
-MODE=; WORLD=; CAMERA=; HEADLESS=; CONTROL_IP=; BUILD=
+MODE=; WORLD=; CAMERA=; HEADLESS=; CONTROL_IP=; BUILD=; NOFILES=
 ARGS=()
 parse_opts() {
     while [ $# -gt 0 ]; do
@@ -60,6 +65,7 @@ parse_opts() {
             --camera)       CAMERA=1 ;;
             --headless)     HEADLESS=1 ;;
             --build)        BUILD=1 ;;
+            --no-files)     NOFILES=1 ;;
             --detach|-d)    DETACH=1 ;;
             -h|--help)      usage ;;
             -*)             die "unknown option $1 (aquarius --help)" ;;
@@ -161,6 +167,44 @@ set_env() {   # KEY VALUE -> docker/.env
     if grep -q "^$1=" "$DOCKER_DIR/.env"; then sed -i "s|^$1=.*|$1=$2|" "$DOCKER_DIR/.env"
     else echo "$1=$2" >> "$DOCKER_DIR/.env"; fi
 }
+get_env() { grep -E "^$1=" "$DOCKER_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2-; }
+
+detect_mode() {   # mode of the running stack (compose project aquarius-<mode>), else from the files here
+    local c p
+    for c in px4-sim drone-control; do
+        running "$c" || continue
+        p=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null)
+        case "$p" in aquarius-local|aquarius-server|aquarius-control) echo "${p#aquarius-}"; return ;; esac
+    done
+    p=$(get_env AQUARIUS_MODE)   # saved by 'aquarius init' (a VM clone of the repo has compose.local.yml too)
+    if [ -n "$p" ]; then echo "$p"
+    elif [ -f "$DOCKER_DIR/compose.local.yml" ]; then echo local
+    elif [ -f "$DOCKER_DIR/compose.server.yml" ]; then echo server
+    else echo control; fi
+}
+
+set_drones() {   # N -> PX4_NUM_DRONES (sim) + NUM_DRONES (MCPP default) in .env
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 10 ] \
+        || die "drones must be 1-10 (port ranges 14540-14549 / 14640-14649 / 18640-18649)"
+    set_env PX4_NUM_DRONES "$1"
+    set_env NUM_DRONES "$1"
+}
+
+wait_ready() {   # until the last drone's MAVLink links are open in the px4-sim log
+    info "waiting for PX4 (Gazebo + drone boot, ~20-60 s per drone) ..."
+    local n; n=$(get_env PX4_NUM_DRONES); n=${n:-1}
+    for _ in $(seq 1 $((120 + 20 * n))); do
+        if docker logs px4-sim 2>&1 | grep -q "drone$((n - 1)) (sysid"; then
+            docker logs px4-sim 2>&1 | grep -E "drone[0-9]+ \(sysid" | tail -n "$n"
+            info "ready — $n drone(s)"
+            cmd_urls
+            return
+        fi
+        running px4-sim || die "px4-sim stopped — docker logs px4-sim"
+        sleep 3
+    done
+    die "PX4 not ready in time — docker logs px4-sim"
+}
 
 cmd_init() {
     MODE=${ARGS[0]:-local}
@@ -172,14 +216,19 @@ cmd_init() {
         [ -f .env.example ] && cp .env.example .env || touch .env
         info "created $DOCKER_DIR/.env"
     fi
-    # options are saved in .env, so later 'up' / restarts keep them
+    # options are saved in .env, so later 'up' / restarts / 'aquarius update' keep them
+    set_env AQUARIUS_MODE "$MODE"
     [ -n "$CONTROL_IP" ] && set_env CONTROL_HOST "$CONTROL_IP"
-    [ -n "$NDRONES" ]    && set_env PX4_NUM_DRONES "$NDRONES"
+    [ -n "$NDRONES" ]    && set_drones "$NDRONES"
     [ -n "$WORLD" ]      && set_env PX4_GZ_WORLD "$WORLD"
     [ -n "$HEADLESS" ]   && set_env HEADLESS 1
     if [ -n "$CAMERA" ]; then set_env PX4_SIM_MODEL gz_x500_mono_cam_down; set_env PX4_SYS_AUTOSTART 4014; fi
-    if [ "$MODE" = server ] && ! grep -qE '^CONTROL_HOST=.+' .env; then
-        die "server mode needs the control computer IP: aquarius init server --control-host <IP>"
+    if [ "$MODE" = server ]; then
+        [ -n "$(get_env CONTROL_HOST)" ] \
+            || die "server mode needs the control computer IP: aquarius init server --control-host <IP>"
+        if [ "$(get_env CONTROL_HOST)" = 192.168.1.50 ] && [ -z "$CONTROL_IP" ]; then
+            echo "    WARNING: CONTROL_HOST is still the .env.example value 192.168.1.50 (--control-host <IP>)"
+        fi
     fi
 
     info "starting $file in $DOCKER_DIR"
@@ -190,28 +239,83 @@ cmd_init() {
         docker compose -f "$file" up -d
     fi
     [ "$MODE" = control ] && { info "control station up — waiting for the VM's PX4: aquarius status"; return; }
+    wait_ready
+}
 
-    info "waiting for PX4 (Gazebo + drone boot, ~20-60 s) ..."
-    local n
-    n=$(grep -E '^PX4_NUM_DRONES=' .env | cut -d= -f2); n=${n:-1}
-    for _ in $(seq 1 120); do
-        if docker logs px4-sim 2>&1 | grep -q "drone$((n - 1)) (sysid"; then
-            docker logs px4-sim 2>&1 | grep -E "drone[0-9]+ \(sysid" | tail -n "$n"
-            info "ready — $n drone(s)"
-            cmd_urls
-            return
+cmd_drones() {
+    [ -f "$DOCKER_DIR/.env" ] || die "no $DOCKER_DIR/.env — run 'aquarius init' first"
+    local n=${ARGS[0]:-$NDRONES}
+    if [ -z "$n" ]; then echo "PX4_NUM_DRONES=$(get_env PX4_NUM_DRONES)"; return; fi
+    MODE=$(detect_mode)
+    [ "$MODE" = control ] && die "the drones run on the VM — run 'aquarius drones $n' there"
+    set_drones "$n"
+    info "PX4_NUM_DRONES=$n saved in $DOCKER_DIR/.env"
+    running px4-sim || { echo "    sim not running — 'aquarius init $MODE' starts it with $n drone(s)"; return; }
+    # px4-sim spawns the drones, telemetry needs the same count (topics, camera bridge, MQTT)
+    info "restarting px4-sim + telemetry ($(compose_file "$MODE")) — flights in progress are lost"
+    cd "$DOCKER_DIR"
+    docker compose -f "$(compose_file "$MODE")" up -d --force-recreate px4-sim telemetry
+    wait_ready
+}
+
+fetch_files() {   # newest compose files: git pull in the repo, else raw GitHub (VM without git)
+    local top; top=$(git -C "$DOCKER_DIR" rev-parse --show-toplevel 2>/dev/null) || top=
+    if [ -n "$top" ] && [ -f "$top/scripts/aquarius" ]; then   # this repo, not some other one around the folder
+        info "git pull ($(git -C "$DOCKER_DIR" rev-parse --abbrev-ref HEAD))"
+        git -C "$DOCKER_DIR" pull --ff-only || echo "    WARNING: git pull failed — using the files as they are"
+        return 0
+    fi
+    command -v curl > /dev/null || { echo "    WARNING: no curl — compose files not updated"; return 0; }
+    local base="https://raw.githubusercontent.com/zflukz/Project-Aquarius/${AQUARIUS_BRANCH:-main}" f dst tmp
+    for f in "docker/$(compose_file "$MODE")" docker/.env.example scripts/aquarius; do
+        # the script only when it is a copy next to the compose file (VM folder)
+        [ "$f" = scripts/aquarius ] && [ "$SCRIPT_DIR" != "$DOCKER_DIR" ] && continue
+        dst=$DOCKER_DIR/${f##*/}
+        tmp=$(mktemp)
+        if curl -fsSL "$base/$f" -o "$tmp" && [ -s "$tmp" ]; then
+            if cmp -s "$tmp" "$dst"; then rm -f "$tmp"; else mv "$tmp" "$dst"; info "updated ${f##*/}"; fi
+            [ "$f" != scripts/aquarius ] || chmod +x "$dst"
+        else
+            rm -f "$tmp"
+            echo "    WARNING: could not download $base/$f (private repo / no network) — kept the old file"
         fi
-        running px4-sim || die "px4-sim stopped — docker logs px4-sim"
-        sleep 3
     done
-    die "PX4 not ready after 6 min — docker logs px4-sim"
+    return 0
+}
+
+cmd_update() {
+    MODE=${ARGS[0]:-$(detect_mode)}
+    local file; file=$(compose_file "$MODE")
+    cd "$DOCKER_DIR"
+    # local = your working tree, nothing to fetch; VM / control computer: newest compose files first
+    [ -n "$NOFILES" ] || [ "$MODE" = local ] || fetch_files
+    [ -f "$file" ] || die "$DOCKER_DIR/$file not found"
+    [ -f .env ] || die "no .env — run 'aquarius init $MODE' first"
+    if [ -f .env.example ]; then   # settings added in a newer .env.example
+        local k missing=
+        for k in $(grep -oE '^[A-Z_]+=' .env.example | tr -d =); do grep -q "^$k=" .env || missing+=" $k"; done
+        [ -z "$missing" ] || echo "    new settings in .env.example (defaults used, copy to .env to change):$missing"
+    fi
+    if [ "$MODE" = local ]; then
+        info "rebuilding + restarting $file"
+        docker compose -f "$file" up -d --build
+    else
+        info "pulling images for $file"
+        docker compose -f "$file" pull
+        docker compose -f "$file" up -d --remove-orphans   # recreates only containers whose image / config changed
+        docker image prune -f > /dev/null                  # old px4-sim layers are several GB
+    fi
+    [ "$MODE" = control ] && { info "updated"; return; }
+    wait_ready
 }
 
 cmd_urls() {
     running px4-sim || return 0
     local h=localhost gz=8080
-    # compose.server.yml: host network, noVNC Gazebo on 8081
-    [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' px4-sim)" = host ] && { h="<VM_IP>"; gz=8081; }
+    # compose.server.yml: host network, noVNC Gazebo on 8081, links with the VM's address
+    if [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' px4-sim)" = host ]; then
+        h=$(hostname -I 2>/dev/null | awk '{print $1}'); h=${h:-<VM_IP>}; gz=8081
+    fi
     echo "    Gazebo      http://$h:$gz/vnc.html"
     echo "    QGC         http://$h:8082/vnc.html"
     if running telemetry; then
@@ -245,7 +349,7 @@ cmd_start() {
 }
 
 cmd_status() {
-    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|influxdb|grafana" || true
+    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|timescaledb|grafana" || true
     for j in mission coverage; do
         local p; p=$(job_pid $j)
         [ -n "$p" ] && echo "    $j running for drone $DRONE (aquarius logs $j)"
@@ -292,6 +396,8 @@ CMD=$1; shift
 parse_opts "$@"
 case "$CMD" in
     init)       cmd_init ;;
+    drones)     cmd_drones ;;
+    update)     cmd_update ;;
     start)      cmd_start ;;
     status)     cmd_status ;;
     rtl|stop)   cmd_action rtl ;;

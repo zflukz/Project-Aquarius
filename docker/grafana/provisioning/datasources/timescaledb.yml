@@ -1,0 +1,19 @@
+# TimescaleDB (PostgreSQL), filled by Telegraf from MQTT aquarius/<fleet>/drone/<i>/<stream>:
+# one hypertable per stream (position, status, battery, ...), columns time, fleet, drone + the JSON fields
+apiVersion: 1
+datasources:
+  - name: TimescaleDB
+    uid: aquarius-tsdb
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: $TSDB_HOST
+    user: $TSDB_USER
+    isDefault: true
+    jsonData:
+      database: $TSDB_DB
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: true
+      timeInterval: 1s
+    secureJsonData:
+      password: $TSDB_PASSWORD

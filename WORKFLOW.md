@@ -35,7 +35,9 @@ bash scripts/aquarius install                 # once: ~/.local/bin/aquarius (the
 
 aquarius init                                 # local test: start sim + views + telemetry, wait for the drones
 aquarius init --drones 2 --camera             # options are saved in docker/.env
-aquarius init server --control-host <IP>      # VM (pull + up)      aquarius init control   # control computer
+aquarius init server --control-host <IP> --drones 2   # VM (pull + up)   aquarius init control   # control computer
+aquarius drones 4                             # change the number of drones (restarts px4-sim + telemetry)
+aquarius update                               # VM / control: git pull + docker pull + up -d   (local: rebuild)
 
 aquarius start mission 37.4125,-121.9985 37.4128,-121.9992        # fly waypoints (LAT,LON) -> RTL
 aquarius start mission "{37.4125,-121.9985}" --alt 30 --drone 1   # options: --alt --speed --drone --detach
@@ -86,23 +88,38 @@ the split setup, so a passing local test is a good check before you deploy.
 echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin   # once, token with write:packages
 cd docker
 docker compose -f compose.local.yml build
-docker compose -f compose.local.yml push px4-sim telemetry drone-control
+docker compose -f compose.local.yml push px4-sim telemetry grafana drone-control
 ```
 
-Images: `ghcr.io/zflukz/aquarius-px4-sim`, `ghcr.io/zflukz/aquarius-telemetry` and `ghcr.io/zflukz/aquarius-drone-control`
-(`REGISTRY` / `TAG` in `docker/.env`). Make the packages public on GitHub, or `docker login` on the VM.
+Images: `ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana` (all three pulled by the VM)
+and `…/aquarius-drone-control` (control computer) — `REGISTRY` / `TAG` in `docker/.env`. Make the packages public on
+GitHub, or `docker login ghcr.io` on the VM. **Until you push, the VM pulls the old images** (or fails with `denied`
+for a package that was never pushed, e.g. `aquarius-grafana`).
 
 ### 1c. Split — VM server (pull only) + control computer
 
-**On the VM server** — no git clone. It needs Docker plus `compose.server.yml` and `.env` in one folder:
+**What runs where:** the VM runs the simulator (`px4-sim`: PX4 ×N + Gazebo + QGC), the noVNC viewers, `telemetry`
+**and the dashboard** (`mosquitto`, `timescaledb`, `telegraf`, `grafana` :3000). The control computer runs only
+`drone-control`. The VM never builds — it pulls the images you pushed in 1b.
+
+**On the VM server** — clone the repo (private: GitHub token as password) or `scp` the files:
 
 ```bash
-mkdir -p ~/aquarius && cd ~/aquarius
-curl -fsSLO https://raw.githubusercontent.com/zflukz/Project-Aquarius/main/docker/compose.server.yml
-curl -fsSL  https://raw.githubusercontent.com/zflukz/Project-Aquarius/main/docker/.env.example -o .env
-#   (or: scp docker/compose.server.yml docker/.env.example user@<VM_IP>:~/aquarius/)
-nano .env        # CONTROL_HOST=<control computer IP>, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS
+git clone -b feature-Network-flukez https://github.com/zflukz/Project-Aquarius.git ~/Project-Aquarius
+cd ~/Project-Aquarius && bash scripts/aquarius install
+#   (or: scp docker/compose.server.yml docker/.env.example scripts/aquarius user@<VM_IP>:~/aquarius/
+#         bash ~/aquarius/aquarius install)
 
+aquarius init server --control-host <CONTROL_IP> --drones 2    # .env + pull + up, waits for every drone
+aquarius drones 3                                              # later: other drone count
+aquarius update                                                # later: newest files + images
+```
+
+Same without the CLI (in `docker/` of the clone, or `~/aquarius`):
+
+```bash
+cp .env.example .env
+nano .env        # CONTROL_HOST=<control computer IP>, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, GRAFANA_ADMIN_PASSWORD
 docker compose -f compose.server.yml pull
 docker compose -f compose.server.yml up -d
 docker compose -f compose.server.yml logs -f px4-sim
@@ -115,13 +132,15 @@ The sim is ready when every drone logs:
 drone0 (sysid 1) -> <CONTROL_IP>:14540 [MAVSDK], :14550 [QGC]
 ```
 
-Update later with `docker compose -f compose.server.yml pull && docker compose -f compose.server.yml up -d`.
+Update later with `aquarius update` (= `git pull`, `docker compose -f compose.server.yml pull && … up -d`,
+`docker image prune -f`). The VM only sees changes after you **pushed** new images (1b).
 
 **On the control computer:**
 
 ```bash
-cd docker
-docker compose -f compose.control.yml up -d          # pulls drone-control (or add --build)
+aquarius init control                                # or: cd docker && docker compose -f compose.control.yml up -d
+aquarius status --drone 1
+aquarius update control                              # later: newest drone-control image
 ```
 
 Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8081-8083/tcp` and `3000/tcp` (Grafana) from the control computer.
@@ -167,11 +186,13 @@ With Docker the sim starts automatically with `up -d`. Configure it in `.env`
 | `PX4_SIM_MODEL` + `PX4_SYS_AUTOSTART` | `gz_x500_mono_cam_down` + `4014` | drone with a downward camera (section 4) |
 | `HEADLESS` | `1` | no Gazebo GUI (saves CPU on the VM) |
 
-Apply changes (no rebuild needed):
+Apply changes (no rebuild needed). px4-sim **and** telemetry: telemetry creates its topics / camera bridge /
+MQTT streams per drone, so it must restart with the same `PX4_NUM_DRONES`:
 
 ```bash
-docker compose -f compose.server.yml up -d --force-recreate px4-sim    # VM
-docker compose -f compose.local.yml  up -d --force-recreate px4-sim    # local test (in docker/)
+aquarius drones 3                                                                 # drone count: sets .env + restarts both
+docker compose -f compose.server.yml up -d --force-recreate px4-sim telemetry    # VM, after editing .env
+docker compose -f compose.local.yml  up -d --force-recreate px4-sim telemetry    # local test (in docker/)
 ```
 
 Drone `i` is reachable on the control computer at `udpin://0.0.0.0:14540+i`.
@@ -346,7 +367,7 @@ Project-Aquarius/
 │   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video + pymavlink
 │   │   ├── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, MQTT bridge, ros2 bag
 │   │   └── mavlink_mqtt.py         PX4 MAVLink → MQTT (Grafana dashboard)
-│   ├── grafana/                    Grafana image: InfluxDB datasource + Aquarius dashboard
+│   ├── grafana/                    Grafana image: TimescaleDB datasource + Aquarius dashboard
 │   └── drone-control/
 │       ├── Dockerfile              ROS 2 Jazzy + MAVSDK + Drone-Control/
 │       ├── entrypoint.sh           sources ROS 2, runs $AUTO_RUN once (e.g. mcpp_mission.py)
@@ -378,7 +399,7 @@ flight_test.py  ─┤                                  │
 mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
 QGroundControl  ◄────────────── udp 14550 ──────────┘   ...             ─┘
 browser :8083 ◄── telemetry ◄── XRCE agent ◄── PX4 uORB   (VM, same network as px4-sim)
-Grafana :3000 ◄── InfluxDB ◄── Telegraf ◄── MQTT :1883 ◄── mavlink_mqtt.py ◄── PX4 MAVLink 14740+i
+Grafana :3000 ◄── TimescaleDB ◄── Telegraf ◄── MQTT :1883 ◄── mavlink_mqtt.py ◄── PX4 MAVLink 14740+i
 view_cam.py ──► ROS 2 DDS  ◄──────┘          ◄── ros_gz_bridge ◄── Gazebo sensors + camera (gz_x500_mono_cam_down)
 ```
 

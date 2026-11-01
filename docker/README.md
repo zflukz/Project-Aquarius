@@ -10,7 +10,7 @@ docker/
 ├── bench_sim.sh                 performance test: native PX4/Gazebo vs Docker compose on the VM
 ├── .env.example                 copy to .env — REGISTRY, CONTROL_HOST, PX4_NUM_DRONES, ...
 ├── compose.local.yml            LOCAL TEST: all containers on your computer (+ build & push images)
-├── compose.server.yml           VM SERVER: pull image only, no git / no build
+├── compose.server.yml           VM SERVER: pull images only (no build) — sim + telemetry + Grafana
 ├── compose.control.yml          CONTROL COMPUTER: drone-control only
 ├── px4-sim/
 │   ├── Dockerfile               Ubuntu 24.04 + Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
@@ -21,7 +21,7 @@ docker/
 │   └── mavlink_mqtt.py          PX4 MAVLink (all drones, udp 14700) → MQTT aquarius/<fleet>/drone/<i>/<stream>
 ├── grafana/
 │   ├── Dockerfile               Grafana + provisioning baked in (image aquarius-grafana, pulled on the VM)
-│   ├── provisioning/            InfluxDB datasource (Flux) + dashboard provider
+│   ├── provisioning/            TimescaleDB datasource (PostgreSQL) + dashboard provider
 │   └── dashboards/aquarius.json dashboard "Aquarius — Fleet telemetry"
 └── drone-control/
     ├── Dockerfile               Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK + Drone-Control/*.py
@@ -35,7 +35,7 @@ Images (set by `REGISTRY` / `TAG` in `.env`):
 | :--- | :--- | :--- |
 | `ghcr.io/zflukz/aquarius-px4-sim:latest` | `px4-sim/` | `compose.local.yml`, `compose.server.yml` |
 | `ghcr.io/zflukz/aquarius-telemetry:latest` | `telemetry/` | `compose.local.yml`, `compose.server.yml` |
-| `ghcr.io/zflukz/aquarius-grafana:latest` | `grafana/` | `compose.local.yml`, `compose.server.yml` (+ public `eclipse-mosquitto:2`, `telegraf:1.36`, `influxdb:2.7`) |
+| `ghcr.io/zflukz/aquarius-grafana:latest` | `grafana/` | `compose.local.yml`, `compose.server.yml` (+ public `eclipse-mosquitto:2`, `telegraf:1.36`, `timescale/timescaledb:2.22.1-pg17`) |
 | `ghcr.io/zflukz/aquarius-drone-control:latest` | `drone-control/` + `../Drone-Control/` | `compose.local.yml`, `compose.control.yml` |
 
 > Shortcut: `scripts/aquarius init [local|server|control]`, `aquarius start mission LAT,LON ...`,
@@ -125,20 +125,43 @@ TAG=v0.2 docker compose -f compose.local.yml push px4-sim telemetry grafana dron
 
 ## ③ Split — VM server (pull only) + control computer
 
-### VM server — no git, no source code
+### What runs where
 
-The VM needs Docker plus **two files** in one folder: `compose.server.yml` and `.env`.
+| Machine | Compose file | Containers |
+| :--- | :--- | :--- |
+| **VM server** | `compose.server.yml` | `px4-sim` (PX4 ×N + Gazebo + QGC), `novnc` :8081, `novnc-qgc` :8082, `telemetry` (camera :8083, MAVLink → MQTT), **`mosquitto` :1883, `timescaledb` (127.0.0.1:5432), `telegraf`, `grafana` :3000** |
+| **Control computer** | `compose.control.yml` | `drone-control` (MAVSDK scripts / `aquarius start ...`), udp 14540-14549 |
+
+Grafana belongs on the VM: telemetry reads PX4's 3rd MAVLink link on `127.0.0.1:14700` there, and the flight history
+(TimescaleDB) stays where the sim runs. Open it from any browser on the LAN / VPN: `http://<VM_IP>:3000`.
+
+### VM server — pull only, no build
+
+The VM never builds images; it pulls what you pushed in ②. It needs the compose file, `.env` and (recommended) the
+`aquarius` command. Two ways to get them:
 
 ```bash
-mkdir -p ~/aquarius && cd ~/aquarius
+# a) clone the repo (recommended — the repo is private, use a GitHub token with repo read as password)
+git clone -b feature-Network-flukez https://github.com/zflukz/Project-Aquarius.git ~/Project-Aquarius
+cd ~/Project-Aquarius && bash scripts/aquarius install
 
-# get the compose file: copy it from your computer ...
-#   scp docker/compose.server.yml docker/.env.example user@<VM_IP>:~/aquarius/
-# ... or download it (public repo)
-curl -fsSLO https://raw.githubusercontent.com/zflukz/Project-Aquarius/main/docker/compose.server.yml
-curl -fsSL  https://raw.githubusercontent.com/zflukz/Project-Aquarius/main/docker/.env.example -o .env
+# b) only the files, copied from your computer
+#   scp docker/compose.server.yml docker/.env.example scripts/aquarius user@<VM_IP>:~/aquarius/
+#   then: bash ~/aquarius/aquarius install   (finds compose.server.yml next to itself; .env is created there)
+```
 
-nano .env        # CONTROL_HOST=<control computer IP>, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS
+Start with the number of drones you want (saved in `.env`):
+
+```bash
+aquarius init server --control-host <CONTROL_IP> --drones 2      # + --headless, --camera, --world default
+```
+
+Without the CLI it is the same as:
+
+```bash
+cd ~/Project-Aquarius/docker        # or ~/aquarius
+cp .env.example .env
+nano .env        # CONTROL_HOST=<control computer IP>, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, GRAFANA_ADMIN_PASSWORD
 
 docker compose -f compose.server.yml pull
 docker compose -f compose.server.yml up -d
@@ -152,11 +175,26 @@ Ready when each drone logs:
 drone0 (sysid 1) -> 192.168.1.50:14540 [MAVSDK], :14550 [QGC]
 ```
 
-Update to a newer image:
+Change the number of drones (px4-sim **and** telemetry must restart — telemetry builds its topics / camera bridge /
+MQTT streams per drone):
 
 ```bash
-docker compose -f compose.server.yml pull && docker compose -f compose.server.yml up -d
+aquarius drones 4
+# = set PX4_NUM_DRONES=4 (and NUM_DRONES=4) in .env, then
+docker compose -f compose.server.yml up -d --force-recreate px4-sim telemetry
 ```
+
+Update after you pushed new images (② on your computer):
+
+```bash
+aquarius update
+# = git pull --ff-only (repo clone), then
+docker compose -f compose.server.yml pull && docker compose -f compose.server.yml up -d && docker image prune -f
+```
+
+`up -d` restarts only the containers whose image or settings changed; `.env` is kept. Without a clone,
+`aquarius update` downloads the compose file from raw GitHub — that only works once the repo is public (else
+`scp` the files and run `aquarius update --no-files`).
 
 Firewall on the VM (only if `ufw` is enabled):
 
@@ -170,12 +208,13 @@ sudo ufw allow from <CONTROL_IP> to any port 3000 proto tcp     # Grafana dashbo
 sudo ufw allow from <CONTROL_IP> to any port 1883 proto tcp     # MQTT (only if the control computer subscribes)
 ```
 
-> noVNC / x11vnc / web_video_server / Mosquitto have **no password** (Grafana has a login, InfluxDB only
+> noVNC / x11vnc / web_video_server / Mosquitto have **no password** (Grafana has a login, TimescaleDB only
 > listens on 127.0.0.1). Keep ports 8081-8083 / 1883 / 9001 / 3000 limited to your LAN / VPN.
 
 ### Control computer
 
 ```bash
+aquarius init control                                     # or:
 cd docker
 docker compose -f compose.control.yml up -d               # pulls the image (or add --build)
 
@@ -187,7 +226,10 @@ docker compose -f compose.control.yml exec -e DRONE_ID=1 drone-control \
 ```
 
 - Open `14540-14549/udp` and `14550/udp` (QGroundControl) for the VM IP.
-- Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`
+- Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`,
+  dashboard: `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083`
+- Several drones: `aquarius start coverage --drones N` / `aquarius start mission ... --drone i` (drone i = udp 14540+i)
+- Update: `aquarius update control` (pulls the newest `aquarius-drone-control`)
 - Without Docker the scripts work natively too: `DRONE_ID=1 python3 Drone-Control/teleop_drone.py`
 - Don't run `compose.local.yml` at the same time (same container name and ports).
 
@@ -383,7 +425,7 @@ Server-side telemetry topics + drone camera view. Full topic list, notes: [`tele
 | `GZ_CAMERA` | from model | camera `<link>/<sensor>` (`camera_link/camera`), `none` = no camera |
 | `WEB_VIDEO_PORT` | `8083` | empty = off |
 | `MQTT_URL` | `mqtt://mosquitto:1883` (local) / `mqtt://127.0.0.1:1883` (VM) | MAVLink → MQTT bridge, empty = off |
-| `FLEET` | `sim` | first topic level / InfluxDB tag (`real` later) |
+| `FLEET` | `sim` | first topic level / `fleet` column in TimescaleDB (`real` later) |
 | `GT_RATE` | `30` | Hz of `/uav_i/gz/ground_truth` (empty = off) |
 | `RECORD` / `RECORD_REGEX` | – / PX4 + gz topics | `1` = `ros2 bag record` (mcap); add `/uav_[0-9]+/camera/image_raw` for video (large) |
 
@@ -400,7 +442,7 @@ Plan / reasons: [`communication_plan.md`](communication_plan.md) (phases M1 + M2
 PX4 drone i ── MAVLink 14740+i → 127.0.0.1:14700 ──► telemetry: mavlink_mqtt.py (pymavlink, one socket, sysid = i+1)
                                                          │ MQTT aquarius/<fleet>/drone/<i>/<stream>  (JSON, booleans 0/1)
                                                          ▼
-                                   mosquitto :1883 / ws :9001 ──► telegraf ──► influxdb :8086 ──► grafana :3000
+                                   mosquitto :1883 / ws :9001 ──► telegraf ──► timescaledb :5432 ──► grafana :3000
 ```
 
 - **3rd PX4 link** (px4-sim entrypoint, `TELEM=1`): PX4 allows 6 MAVLink instances — 4 from `px4-rc.mavlink`
@@ -409,7 +451,11 @@ PX4 drone i ── MAVLink 14740+i → 127.0.0.1:14700 ──► telemetry: mavl
   1 Hz GCS heartbeat (PX4 forwards `STATUSTEXT` only to GCS links). It sends **no** commands.
 - Streams: `online`, `status` (armed, mode, landed), `position` (lat, lon, alt_amsl, alt_rel, vn/ve/vd, speed,
   climb, hdg), `attitude`, `battery`, `gps`, `health`, `mission` (seq, total), `event` (STATUSTEXT).
-  → InfluxDB measurement = stream, tags `fleet` + `drone`, bucket `aquarius`.
+  → **TimescaleDB** (PostgreSQL 17 + TimescaleDB 2.22, DB `aquarius`): Telegraf `outputs.postgresql` creates one
+  table per stream (`"position"`, `"status"`, ...) with columns `time` (timestamptz), `fleet`, `drone` (text) + one
+  column per JSON field (numbers `double precision`, strings `text`; new fields → new columns). Each new table is
+  made a **hypertable** (1-day chunks) with index `(fleet, drone, time DESC)` and a retention policy
+  (`TSDB_RETENTION`) by `aquarius_hypertable()` — defined in the `timescaledb_init` config (runs on an empty volume).
 - Dashboard **Aquarius — Fleet telemetry** (home page): link / armed / mode / battery / altitude / satellites
   per drone, satellite map with flight path, drone camera (MJPEG from `:8083`), altitude / speed / climb,
   flight-mode timeline, mission waypoint, battery %, voltage, GPS eph, sensors, events table, roll / pitch.
@@ -417,18 +463,27 @@ PX4 drone i ── MAVLink 14740+i → 127.0.0.1:14700 ──► telemetry: mavl
   the VM open `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (`aquarius urls` prints it).
   Colors: drone i = fixed categorical slot i; status green / yellow / red only for OK / warning / fault.
 - Edit in the UI, then Export → JSON into `grafana/dashboards/aquarius.json` and rebuild `aquarius-grafana`.
-- Raw data: `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v`; InfluxDB UI <http://localhost:8086>
-  (VM: `ssh -L 8086:127.0.0.1:8086 <vm>`), login `admin` / `INFLUX_PASSWORD`.
-- Mosquitto / Telegraf configs are inline in the compose files (`configs:` → Compose ≥ 2.23.1), same text in
-  both — keep them in sync. Secrets in `.env`: `GRAFANA_ADMIN_PASSWORD`, `INFLUX_PASSWORD`, `INFLUX_TOKEN`
-  (applied on first start only — empty volumes), `INFLUX_RETENTION` (30d).
+  Panels are SQL (datasource `TimescaleDB`, uid `aquarius-tsdb`): numbers as format *Time series* with a text
+  column `drone` (`'drone ' || drone`) → becomes the series label (`displayName ${__field.labels.drone}`);
+  strings (flight mode, mission progress) as format *Table* + transformation *Partition by values* (`drone`, as labels).
+- Raw data: `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v`; SQL:
+  `docker exec -it timescaledb psql -U aquarius aquarius` (local also `psql -h localhost`, VM `ssh -L 5432:127.0.0.1:5432 <vm>`), e.g.
+  `SELECT time, drone, lat, lon, alt_rel FROM "position" ORDER BY time DESC LIMIT 5;`
+  (quote table names: `position` is an SQL keyword). Fits pandas / Python analysis directly (`psycopg`).
+- Mosquitto / Telegraf / TimescaleDB-init configs are inline in the compose files (`configs:` → Compose ≥ 2.23.1),
+  same text in both — keep them in sync. Secrets in `.env`: `GRAFANA_ADMIN_PASSWORD`, `TSDB_PASSWORD` (applied on
+  first start only — empty volumes), `TSDB_RETENTION` (30d, read when a table is created; change later with
+  `SELECT remove_retention_policy('"position"'); SELECT add_retention_policy('"position"', INTERVAL '90 days');`).
 
 | Env | Where | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `TELEM` / `TELEM_HOST` | px4-sim | `1` / `127.0.0.1` | 3rd MAVLink link on/off, target of the link |
 | `MQTT_URL` / `FLEET` | telemetry | see above / `sim` | bridge target / topic prefix |
 | `GRAFANA_ADMIN_PASSWORD` | grafana | `admin` | change on the VM |
-| `INFLUX_TOKEN` / `INFLUX_PASSWORD` / `INFLUX_RETENTION` | influxdb, telegraf, grafana | dev values / `30d` | |
+| `TSDB_PASSWORD` | timescaledb, telegraf, grafana | `aquarius-admin` | DB user `aquarius`, change on the VM before the first start |
+| `TSDB_RETENTION` | telegraf | `30d` | keep data this long (`''` / `0` = forever) |
+| `TSDB_MEMORY` | timescaledb | `1GB` | memory timescaledb-tune sizes Postgres for |
+| `TSDB_PORT` | VM only | `5432` | if the VM already runs a Postgres on 5432 |
 
 ### drone-control
 - Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK, with `Drone-Control/` copied in at build time
@@ -471,7 +526,7 @@ If it stays well below 1.0, run fewer drones, switch to `PX4_GZ_WORLD=default`, 
 
 ### Communication plan
 
-MAVLink → MQTT → Telegraf / InfluxDB / Grafana for live dashboards + history, Kafka only when needed, control and
+MAVLink → MQTT → Telegraf / TimescaleDB / Grafana for live dashboards + history, Kafka only when needed, control and
 video kept off the broker: **[`communication_plan.md`](communication_plan.md)** (phases M1–M6).
 
 ### Telemetry & camera plan

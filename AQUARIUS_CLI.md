@@ -33,6 +33,8 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | Command | What it does |
 | :--- | :--- |
 | `aquarius init [local\|server\|control]` | start the containers for that machine and wait until PX4 is ready |
+| `aquarius drones [N]` | show / change the number of simulated drones (1–10), restarts px4-sim + telemetry |
+| `aquarius update [local\|server\|control]` | newest compose files + images, restart what changed (VM / control: pull only, local: rebuild) |
 | `aquarius start mission LAT,LON [LAT,LON ...]` | fly to the points in order, then return home and land |
 | `aquarius start coverage [LAT,LON]` | MCPP coverage flight (lawnmower path) over an area centred on the point |
 | `aquarius status` | containers, then armed / flight mode / battery / position / GPS of a drone |
@@ -58,6 +60,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `--camera` | init | – | drones with a downward camera (`gz_x500_mono_cam_down`) |
 | `--world W` | init | `baylands` | Gazebo world (`default` = flat and light) |
 | `--headless` | init | – | no Gazebo GUI (saves CPU) |
+| `--no-files` | update | – | only pull / rebuild images, don't `git pull` / download the compose files |
 | `--control-host IP` | init server | – | IP of the control computer (required on the VM) |
 | `--build` | init local | – | rebuild the images before starting |
 
@@ -86,10 +89,12 @@ drone0 (sysid 1) -> 172.19.0.2:14540 [MAVSDK], :14550 [QGC]
     Grafana     http://localhost:3000/d/aquarius-fleet?var-cam=http://localhost:8083
 ```
 
-**Split setup** (simulator on the VM, scripts on your computer):
+**Split setup** (simulator + dashboard on the VM, scripts on your computer):
 
 ```bash
-# VM — needs only compose.server.yml (+ .env) next to the script, or the repo
+# VM — repo clone (recommended, the repo is private) or only compose.server.yml + .env + aquarius in one folder
+git clone -b feature-Network-flukez https://github.com/zflukz/Project-Aquarius.git ~/Project-Aquarius
+cd ~/Project-Aquarius && bash scripts/aquarius install
 aquarius init server --control-host 192.168.1.50 --drones 2
 
 # control computer
@@ -97,8 +102,39 @@ aquarius init control
 aquarius status
 ```
 
-On the VM the links use `http://<VM_IP>:8081/vnc.html` (Gazebo), `:8082` (QGC), `:8083` (camera), `http://<VM_IP>:3000` (Grafana, login `admin` / `GRAFANA_ADMIN_PASSWORD`).
-Firewall ports are listed in `docker/README.md`.
+The VM runs px4-sim (PX4 + Gazebo), the noVNC viewers, telemetry **and the Grafana stack** (mosquitto, timescaledb,
+telegraf, grafana); the control computer runs only drone-control. On the VM `urls` prints the VM's own address:
+`http://<VM_IP>:8081/vnc.html` (Gazebo), `:8082` (QGC), `:8083` (camera), `http://<VM_IP>:3000` (Grafana, login
+`admin` / `GRAFANA_ADMIN_PASSWORD`). Firewall ports are listed in `docker/README.md`.
+
+`init` saves the mode (`AQUARIUS_MODE=server`) in `.env`, so `drones` / `update` on the VM never build or start
+`compose.local.yml`, even in a repo clone.
+
+### Number of drones — `drones`
+
+```bash
+aquarius drones          # PX4_NUM_DRONES=2
+aquarius drones 4        # save 4 in .env (PX4_NUM_DRONES + NUM_DRONES), recreate px4-sim + telemetry, wait
+```
+
+Works the same on the VM and locally. Running flights are lost (the sim restarts). 1–10 drones (port ranges);
+CPU sizing: `docker/README.md` → "Future plan". Then fly them, e.g. `aquarius start coverage --drones 4`
+on the control computer.
+
+### Update — `update`
+
+```bash
+aquarius update          # mode from .env / the running stack
+aquarius update server   # explicit
+```
+
+| Mode | What it does |
+| :--- | :--- |
+| `server` / `control` | `git pull --ff-only` (repo clone) **or** downloads `compose.<mode>.yml`, `.env.example` and a copy of `aquarius` next to them from raw GitHub (`AQUARIUS_BRANCH`, default `main`; public repo only) → `docker compose pull` → `up -d` (only containers whose image / config changed restart) → `docker image prune -f` → waits for PX4 |
+| `local` | `docker compose up -d --build` (your working tree, no git) |
+
+`.env` is never overwritten; settings that are new in `.env.example` are listed so you can copy them.
+The VM only gets new images after they were **pushed** from your computer (`docker/README.md` ②).
 
 ---
 
@@ -198,7 +234,7 @@ Scripts used: `Drone-Control/mission_cli.py` (`goto`, `status`, `rtl`, `land`) a
 (coverage). Both can also be run directly, e.g. `python3 mission_cli.py goto 37.4125,-121.9985`.
 
 Env vars: `DRONE_ID` (default drone), `AQUARIUS_DOCKER_DIR` (folder with the compose files and `.env`, default
-`<repo>/docker`, or the current folder on a VM without the repo).
+`<repo>/docker`, or the current folder on a VM without the repo), `AQUARIUS_BRANCH` (`update` without git).
 
 Exit codes: `0` = done; `1` = bad input, refused waypoint, mission did not finish, or PX4 not ready.
 
@@ -209,7 +245,10 @@ Exit codes: `0` = done; `1` = bad input, refused waypoint, mission did not finis
 | Problem | Fix |
 | :--- | :--- |
 | `aquarius: command not found` | `bash scripts/aquarius install`, add `~/.local/bin` to PATH, or use `bash scripts/aquarius` |
-| `PX4 not ready after 6 min` | `aquarius logs px4`. Baylands download or low RAM: try `--world default --headless` |
+| `PX4 not ready in time` | `aquarius logs px4`. Baylands download or low RAM: try `--world default --headless` |
+| VM: `pull` → `denied` / `manifest unknown` | images not pushed yet, or GHCR packages private: push from your computer, make them public or `docker login ghcr.io` on the VM |
+| VM: `could not download … (private repo)` | `update` without git needs a public repo — clone the repo on the VM, or `scp` the files and use `--no-files` |
+| VM: still old behaviour after `update` | the images on GHCR are old — rebuild + push from your computer first |
 | `waypoint … m from home > MAX_DIST` | wrong point or swapped lat/lon? If intended: `--max-dist 3000` |
 | `invalid point … (LAT,LON order?)` | latitude first, -90..90 |
 | `a mission is already running for drone N` | `aquarius rtl --drone N` (or wait), then start again |

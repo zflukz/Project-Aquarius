@@ -6,7 +6,7 @@
 #      ground_truth.py                 true pose           /uav_i/gz/ground_truth (PoseStamped, GT_RATE Hz)
 #   3. web_video_server :WEB_VIDEO_PORT camera in the browser  http://<host>:8083/
 #   4. mavlink_mqtt.py  udp :14700     PX4 MAVLink (3rd link per drone) -> MQTT aquarius/<FLEET>/drone/<i>/*
-#                                       -> Telegraf -> InfluxDB -> Grafana :3000 (docker/communication_plan.md)
+#                                       -> Telegraf -> TimescaleDB -> Grafana :3000 (docker/communication_plan.md)
 #   5. RECORD=1                        ros2 bag (mcap) of RECORD_REGEX -> $DATA_DIR/bags/<date>
 #
 # Must share px4-sim's network: PX4's uXRCE client sends to 127.0.0.1:8888, and Gazebo transport
@@ -125,7 +125,7 @@ if [ -n "$WEB_VIDEO_PORT" ]; then
     PIDS+=($!)
 fi
 
-# 4. MAVLink telemetry -> MQTT (Grafana dashboard via Telegraf / InfluxDB; no ROS needed)
+# 4. MAVLink telemetry -> MQTT (Grafana dashboard via Telegraf / TimescaleDB; no ROS needed)
 if [ -n "$MQTT_URL" ]; then
     python3 -u "$MQTT_SCRIPT" > >(sed -u 's/^/[mqtt] /') 2>&1 &
     PIDS+=($!)

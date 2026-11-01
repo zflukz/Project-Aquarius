@@ -5,11 +5,15 @@ dashboards. It builds on [`telemetry_plan.md`](telemetry_plan.md), which lists w
 documents the ROS 2 `telemetry` service (§4).
 
 Status 2026-10-18: **M1 + M2 implemented and tested locally** (`compose.local.yml`, 1 drone): 3rd PX4 link,
-`mavlink_mqtt.py`, Mosquitto, Telegraf, InfluxDB 2.7, Grafana 12.2 with the provisioned dashboard (details:
+`mavlink_mqtt.py`, Mosquitto, Telegraf, TimescaleDB, Grafana 12.2 with the provisioned dashboard (details:
 [`README.md` → Dashboard](README.md#dashboard-grafana)). Foxglove removed. M3–M6 open. Differences from the plan
 below: booleans are 0/1, no per-drone MQTT last-will (one client for all drones → `bridge/online` will + 1 Hz
 `online` + Grafana's "no message for 5 s = offline"), PX4's onboard-payload link is stopped to make room
 (6-instance limit), the bridge sends a GCS heartbeat (needed for STATUSTEXT). §7 numbers are estimates.
+
+**Database: TimescaleDB** (`timescale/timescaledb:2.22.1-pg17`): Telegraf `outputs.postgresql`, one
+hypertable per stream, Grafana panels in SQL. Reasons: plain SQL / PostgreSQL (joins with mission or MCPP tables later,
+pandas / psycopg, any DB tool).
 
 ---
 
@@ -57,12 +61,12 @@ Gaps:
 | Across networks (R4) | hard (multicast discovery) | **easy**: clients connect out to one broker over TCP; QoS, reconnect, last-will | MQTT at the edge, Kafka inside the backend |
 | Many consumers (R5) | yes, but each one needs ROS + matching `px4_msgs` | topic tree + wildcards, any language, browser via WebSocket | partitions by drone, consumer groups, own pace |
 | History (R2) | `ros2 bag` files | none in the broker (only the retained last value) → needs a database | **durable log, replay any range** |
-| Grafana | needs a custom ROS → DB writer | **Telegraf `mqtt_consumer` → InfluxDB, config only** | Telegraf `kafka_consumer` → InfluxDB |
+| Grafana | needs a custom ROS → DB writer | **Telegraf `mqtt_consumer` → TimescaleDB, config only** | Telegraf `kafka_consumer` → TimescaleDB |
 | Video (R7) | image topics (heavy) | not suitable | not suitable |
 | Control (R6) | possible (offboard via `/fmu/in/*`) | not through the broker | not through Kafka |
 | Weight (R8) | ~350 MB (running) | Mosquitto ~10 MB | **+1–2 GB** (JVM, KRaft) and more ops work |
 
-**Decision:** MAVLink → MQTT is the telemetry backbone, and Grafana reads it through Telegraf and InfluxDB.
+**Decision:** MAVLink → MQTT is the telemetry backbone, and Grafana reads it through Telegraf and TimescaleDB.
 ROS 2 stays for the data only it has: sim ground truth, raw sensors, camera and bags (Foxglove removed 2026-10-18).
 Kafka is only added when the triggers in §6 are met.
 
@@ -80,7 +84,7 @@ Kafka is only added when the triggers in §6 are met.
                                                                                      │  aquarius/drone/<i>/...
                                        ┌─────────────────────────────────────────────┼──────────────────────┐
                                        ▼                                             ▼                      ▼
-                                Telegraf → InfluxDB :8086 → Grafana :3000     web app / alerts       MCPP analysis
+                                Telegraf → TimescaleDB :5432 → Grafana :3000    web app / alerts       MCPP analysis
                                 (history)                  (dashboards)       (MQTT over WS)         (Python, paho)
 
  video: GstCameraSystem RTP H.264 :5600+i  /  web_video_server MJPEG :8083   (never through MQTT / Kafka)
@@ -150,7 +154,7 @@ Raw IMU and the camera are deliberately **not** on MQTT; they stay in ROS 2 / ba
 ## 6. Kafka — when, and how
 
 Add Kafka only when **at least one** of these is true:
-- Analyses need to replay or reprocess flights from the raw stream, and the InfluxDB data isn't enough.
+- Analyses need to replay or reprocess flights from the raw stream, and the TimescaleDB data isn't enough.
 - More than ~5 independent backend services consume the stream, at different speeds.
 - Many VMs or sites, or tens of drones, with throughput the single broker can't handle.
 - Stream processing is needed (Kafka Streams / Flink, e.g. live coverage % of MCPP).
@@ -168,14 +172,14 @@ Telegraf then reads from Kafka instead of MQTT. Nothing on the drone side change
 | Mosquitto | `eclipse-mosquitto:2` | 1883 (MQTT), 9001 (WebSocket) | LAN / VPN, password | ~10 MB |
 | `mavlink_mqtt.py` | `aquarius-telemetry` (2nd process) or own small image | udp 14700 (local) | no | ~50 MB |
 | Telegraf | `telegraf:1.3x` | – | no | ~50 MB |
-| InfluxDB 2 | `influxdb:2` | 8086 | localhost only | ~200–300 MB |
+| TimescaleDB | `timescale/timescaledb:2.22.1-pg17` | 5432 | localhost only | ~200–400 MB (`TSDB_MEMORY` 1GB tune) |
 | Grafana | `grafana/grafana-oss` | 3000 | LAN / VPN, login | ~100 MB |
 | Kafka (only §6) | `apache/kafka` (KRaft) | 9092 | no | 1–2 GB |
 
 Firewall additions: 1883 / 9001 / 3000 tcp from the control computer. Secrets (`MQTT_PASS`, `GRAFANA_ADMIN_PASSWORD`,
-`INFLUX_TOKEN`) go in `docker/.env`, never in compose files.
+`TSDB_PASSWORD`) go in `docker/.env`, never in compose files.
 
-Grafana is provisioned from files (`docker/grafana/provisioning/`): an InfluxDB datasource plus an **Aquarius** dashboard
+Grafana is provisioned from files (`docker/grafana/provisioning/`): a TimescaleDB (PostgreSQL) datasource plus an **Aquarius** dashboard
 with a drone selector variable and these panels:
 - Geomap: positions and flight path.
 - Time series: altitude, speed, battery.
@@ -191,7 +195,7 @@ with a drone selector variable and these panels:
 | Phase | Work | Done when |
 | :--- | :--- | :--- |
 | **M1** | 3rd PX4 link (§4.1) in entrypoint + native; `mavlink_mqtt.py`; Mosquitto in `compose.local/server.yml` | `mosquitto_sub -t 'aquarius/#' -v` shows every stream for 2 drones during `flight_test.py`; `online` goes false when px4-sim stops |
-| **M2** | Telegraf + InfluxDB + Grafana, provisioned dashboard | dashboard shows a live flight and the previous one after restart; refresh ≤ 1 s |
+| **M2** | Telegraf + TimescaleDB + Grafana, provisioned dashboard | dashboard shows a live flight and the previous one after restart; refresh ≤ 1 s |
 | **M3** | `ros_mqtt.py`: ground truth (sim) → MQTT; Grafana panel: estimate vs truth error | error panel during an MCPP flight |
 | **M4** | Security: Mosquitto passwords + ACL (bridge writes, others read), Grafana login, TLS if over internet; split VM / control test | control computer opens Grafana and subscribes MQTT across the real network |
 | **M5** | Real drone path (§4.3) with `mavlink-router` | same dashboard, `fleet=real` |
@@ -203,8 +207,8 @@ Each phase also: native script twin (`scripts/`), `.env.example`, `README.md` / 
 
 ## 9. Open questions
 
-1. Where do dashboards live: on the sim VM (simplest) or a separate backend VM? This also decides where MQTT and InfluxDB run.
+1. Where do dashboards live: on the sim VM (simplest) or a separate backend VM? This also decides where MQTT and the database run. → VM (2026-10-31).
 2. LAN / VPN only, or reachable over the internet (TLS + domain needed)?
 3. Target fleet size for the project (5? 10? more?), which decides whether §6 ever applies.
-4. Retention: how long to keep flight data (InfluxDB retention policy)?
+4. Retention: how long to keep flight data (TimescaleDB retention policy, `TSDB_RETENTION`, default 30d)?
 5. Real drone hardware: radio-only or a companion computer? This decides where the bridge runs (§4.3).
