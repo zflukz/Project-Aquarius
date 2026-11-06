@@ -13,6 +13,7 @@ a separate computer, later real drones.
 | :--- | :--- |
 | `docker/` | **everything Docker / simulator** — see `docker/README.md` |
 | `Drone-Control/` | `flight_test.py`, `teleop_drone.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
+| `Interface/` | React + Google Maps web app (select area → lat/lng); `npm run dev`, Docker: `docker/compose.map.yml` |
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
 | `scripts/` | legacy **native** (non-Docker) install scripts |
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |

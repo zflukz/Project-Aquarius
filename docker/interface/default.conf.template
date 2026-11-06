@@ -1,0 +1,15 @@
+# Rendered by the nginx image's envsubst at start; injects the API key into index.html.
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    location = /index.html {
+        sub_filter '__GOOGLE_MAPS_API_KEY__' '${GOOGLE_MAPS_API_KEY}';
+        sub_filter_once on;
+        add_header Cache-Control no-store;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

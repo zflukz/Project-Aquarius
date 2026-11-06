@@ -1,0 +1,7 @@
+*
+!Interface/package.json
+!Interface/package-lock.json
+!Interface/index.html
+!Interface/vite.config.js
+!Interface/src/
+!docker/interface/default.conf.template

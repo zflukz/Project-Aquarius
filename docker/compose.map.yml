@@ -1,0 +1,14 @@
+# Interface web app (React + Google Maps area select) — http://localhost:${MAP_PORT:-8090}
+#   cd docker && docker compose -f compose.map.yml up -d --build
+services:
+  interface:
+    build:
+      context: ..
+      dockerfile: docker/interface/Dockerfile
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-interface:${TAG:-latest}
+    container_name: interface
+    ports:
+      - "${MAP_PORT:-8090}:80"
+    environment:
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:?set GOOGLE_MAPS_API_KEY in docker/.env}
+    restart: unless-stopped
