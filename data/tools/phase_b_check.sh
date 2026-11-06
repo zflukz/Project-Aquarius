@@ -53,7 +53,7 @@ echo "== 4. Image / telemetry time sync (A4)"
 python3 tools/check_time_sync.py --seconds "$SECS" > /tmp/aq_sync.txt 2>/dev/null
 if grep -qE ' (PASS|FAIL)$' /tmp/aq_sync.txt; then
   grep -E ' (PASS|FAIL|NO DATA)$' /tmp/aq_sync.txt | sed 's/^/        /'
-  if grep -qE ' (FAIL|NO DATA)$' /tmp/aq_sync.txt; then bad "some drones out of sync or without images"; else ok "all drones within 50 ms"; fi
+  if grep -qE ' (FAIL|NO DATA)$' /tmp/aq_sync.txt; then bad "some drones out of sync or without images"; else ok "all drones in sync (telemetry within 100 ms around every image)"; fi
 else
   bad "time sync not verified (no images yet?) - run tools/check_time_sync.py for details"
 fi

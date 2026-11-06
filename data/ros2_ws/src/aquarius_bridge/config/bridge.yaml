@@ -10,7 +10,7 @@ aquarius_bridge:
     # One entry per drone: "drone_id,px4_namespace,camera_topic" — up to 10 drones (A3).
     # Drones that are not running are harmless: their topics just stay silent.
     # Check the real names with `ros2 topic list` (A1 note):
-    #   PX4 SITL instance 1 -> /px4_1/fmu/out/...   (instance 0 may have no namespace: use "/")
+    #   PX4 SITL instance N -> /uav_N/fmu/out/...  (older PX4: /px4_N; instance 0 / `make px4_sitl`: no namespace, use "/")
     drones:
       - "uav1,/uav_1,/uav1/camera/image/compressed"
       - "uav2,/uav_2,/uav2/camera/image/compressed"

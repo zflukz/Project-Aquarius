@@ -60,11 +60,19 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    try:
-        lines = subprocess.run(["gz", "topic", "-l"], capture_output=True, text=True, timeout=20).stdout.splitlines()
-    except FileNotFoundError:
-        sys.exit("`gz` not found: is Gazebo Harmonic installed (ros-jazzy-ros-gz)?")
-    cams, clock = parse_gz_topics(lines)
+    import time
+    cams, clock = {}, None
+    for attempt in range(10):          # Gazebo may still be spawning the drones: retry ~30 s
+        try:
+            lines = subprocess.run(["gz", "topic", "-l"], capture_output=True, text=True,
+                                   timeout=20).stdout.splitlines()
+        except FileNotFoundError:
+            sys.exit("`gz` not found: is Gazebo Harmonic installed (ros-jazzy-ros-gz)?")
+        cams, clock = parse_gz_topics(lines)
+        if cams:
+            break
+        print("waiting for camera topics...", file=sys.stderr)
+        time.sleep(3)
     if not cams:
         sys.exit("No camera topics found. Is the swarm running with a camera model (MODEL=x500_mono_cam_down)?\n"
                  "Check with: gz topic -l | grep image")

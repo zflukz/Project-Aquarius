@@ -104,6 +104,20 @@ class TestTimeSync(unittest.TestCase):
         self.assertLessEqual(r["pair_p95_ms"], 50)
         self.assertEqual(r["bracketed_pct"], 100.0)
 
+    def test_p95_near_50_still_passes(self):
+        # ~10 Hz telemetry with jitter (104 ms gaps), images halfway between: 52 ms (seen in SITL)
+        tele = [(i * 104_000, 0) for i in range(100)]
+        imgs = [(i * 520_000 + 52_000, 0) for i in range(1, 19)]
+        r = analyze(tele, imgs)
+        self.assertGreater(r["pair_p95_ms"], 50)
+        self.assertEqual(r["verdict"], "PASS")
+
+    def test_telemetry_hole_not_bracketed(self):
+        tele = [(i * 100_000, 0) for i in range(100) if not 40 <= i <= 44]   # 600 ms hole
+        imgs = [(i * 500_000 + 30_000, 0) for i in range(1, 19)]
+        r = analyze(tele, imgs)
+        self.assertLess(r["bracketed_pct"], 100.0)
+
     def test_shifted_clock_fails(self):
         r = analyze(*self._data(img_clock_offset_us=-3_000_000))   # images 3 s "early"
         self.assertEqual(r["verdict"], "FAIL")
