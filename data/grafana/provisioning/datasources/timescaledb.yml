@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: Aquarius DB
+    uid: aquarius-db
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: db:5432
+    user: ${PG_USER}
+    isDefault: true
+    jsonData:
+      database: ${PG_DB}
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: ${PG_PASSWORD}

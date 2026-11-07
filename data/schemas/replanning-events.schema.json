@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aquarius.local/schemas/replanning-events.schema.json",
+  "title": "replanning-events",
+  "description": "Multi-UAV Control -> Kafka on every replanning event (A2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "mission_id",
+    "ts_us",
+    "event_type",
+    "drone_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "ts_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch microseconds of when the data was produced (A4)"
+    },
+    "event_type": {
+      "enum": [
+        "rtl_triggered",
+        "reassigned",
+        "mission_complete"
+      ]
+    },
+    "drone_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^uav[0-9]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "battery_remaining": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "waypoints_reassigned": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assigned_to": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^uav[0-9]+$"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

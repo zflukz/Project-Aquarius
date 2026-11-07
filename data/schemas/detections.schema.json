@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aquarius.local/schemas/detections.schema.json",
+  "title": "detections",
+  "description": "AI Detection -> Kafka, one message per frame with at least one object (A2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "drone_id",
+    "frame_id",
+    "ts_us",
+    "model_version",
+    "image_w",
+    "image_h",
+    "objects"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "drone_id": {
+      "type": "string",
+      "pattern": "^uav[0-9]+$"
+    },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch microseconds of when the data was produced (A4)"
+    },
+    "model_version": {
+      "type": "string"
+    },
+    "image_w": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image_h": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "objects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "class",
+          "conf",
+          "bbox_xyxy",
+          "center_uv"
+        ],
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "conf": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "bbox_xyxy": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "center_uv": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    }
+  }
+}

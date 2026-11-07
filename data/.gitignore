@@ -1,0 +1,17 @@
+# secrets / local settings (commit .env.example only)
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ROS 2 build output and the px4_msgs clone (each person builds their own)
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/src/px4_msgs/
+
+# test output: logs, saved images, generated bridge config, CSV measurements
+results/*
+!results/.gitkeep
