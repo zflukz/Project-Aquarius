@@ -87,12 +87,13 @@ the split setup, so a passing local test is a good check before you deploy.
 ```bash
 echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin   # once, token with write:packages
 cd docker
-docker compose -f compose.local.yml build
-docker compose -f compose.local.yml push px4-sim telemetry grafana drone-control
+docker compose -f compose.local.yml --profile pipeline build
+docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana ingestion imagestream drone-control
 ```
 
-Images: `ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana` (all three pulled by the VM)
-and `…/aquarius-drone-control` (control computer) — `REGISTRY` / `TAG` in `docker/.env`. Make the packages public on
+Images: `ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana` (pulled by the VM),
+`…/aquarius-ingestion`, `…/aquarius-imagestream` (VM, only with the data pipeline) and `…/aquarius-drone-control`
+(control computer) — `REGISTRY` / `TAG` in `docker/.env`. Make the packages public on
 GitHub, or `docker login ghcr.io` on the VM. **Until you push, the VM pulls the old images** (or fails with `denied`
 for a package that was never pushed, e.g. `aquarius-grafana`).
 
@@ -346,6 +347,22 @@ docker exec telemetry with-ros ros2 topic hz /uav_0/camera/image_raw
 > Native (no Docker): `bash scripts/install_telemetry_server.sh` once, then `bash scripts/run_telemetry_native.sh`
 > next to `run_sim_native.sh` (same env) — same topics and ports.
 
+### 4a. Data pipeline — Gazebo drones → Kafka → TimescaleDB → Mission dashboard
+
+```bash
+aquarius pipeline up          # on demand (or: aquarius pipeline on = always, saved in .env)
+aquarius logs pipeline        # [stats] image-frames=… telemetry=… per 10 s, ingestion counts
+aquarius urls                 # Mission dashboard + Kafka UI links
+aquarius pipeline down        # stop (data is kept); the sim keeps running
+```
+
+The `aquarius_bridge` inside `telemetry` sends every drone's PX4 telemetry (10 Hz) and camera JPEGs (2 fps) to Kafka
+as `uav0`, `uav1`, …; `ingestion` validates against `Data-Pipeline/schemas/` and writes TimescaleDB + PostGIS tables
+(`telemetry`, `missions`, `grid_cells`, `persons`, …). Grafana → **Aquarius — Mission monitor**: coverage, map with
+grid / flown path / drones, status, camera of every drone, pipeline latency. Checks:
+`bash Data-Pipeline/tools/phase_c_check.sh` (DB), `phase_b_check.sh` (while flying). Details: `docker/README.md`
+→ "Data pipeline".
+
 ---
 
 ## 5. File Reference
@@ -357,7 +374,7 @@ Project-Aquarius/
 │   ├── baylands_setup_guide.md     Baylands world: pre-cache + troubleshooting
 │   ├── .env.example                REGISTRY, CONTROL_HOST, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, ...
 │   ├── compose.local.yml           local test: all containers on your computer (+ build & push)
-│   ├── compose.server.yml          VM server: pull image only (px4-sim, noVNC, telemetry)
+│   ├── compose.server.yml          VM server: pull images only (sim, telemetry, dashboards, pipeline profile)
 │   ├── telemetry_plan.md           telemetry / camera: what exists, plan, telemetry service (§4)
 │   ├── compose.control.yml         control computer: drone-control
 │   ├── px4-sim/
@@ -367,13 +384,21 @@ Project-Aquarius/
 │   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video + pymavlink
 │   │   ├── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, MQTT bridge, ros2 bag
 │   │   └── mavlink_mqtt.py         PX4 MAVLink → MQTT (Grafana dashboard)
-│   ├── grafana/                    Grafana image: TimescaleDB datasource + Aquarius dashboard
+│   ├── grafana/                    Grafana image: datasource + dashboards Fleet (aquarius.json) + Mission (mission.json)
+│   ├── db/migrations/, db/tests/   pipeline tables / functions (db-migrate) and their checks
+│   ├── ingestion/                  Kafka → TimescaleDB consumer + migration runner
+│   ├── imagestream/                Kafka camera frames → MJPEG :8090 (Mission dashboard)
+│   ├── merge_status.md             2026-11-08 data/ → docker/ merge: decisions, tests, open points
 │   └── drone-control/
 │       ├── Dockerfile              ROS 2 Jazzy + MAVSDK + Drone-Control/
 │       ├── entrypoint.sh           sources ROS 2, runs $AUTO_RUN once (e.g. mcpp_mission.py)
 │       └── Dockerfile.dockerignore
+├── Data-Pipeline/
+│   ├── ros2_ws/src/aquarius_bridge ROS 2 → Kafka bridge (built into the telemetry image)
+│   ├── schemas/                    JSON schemas of every Kafka message (shared with AI / Georef / Control)
+│   └── tools/                      checks, fake drones, demo mission, DDS discovery server, native SITL
 ├── scripts/
-│   ├── aquarius                    CLI: init / start mission LAT,LON / start coverage / status / rtl / land
+│   ├── aquarius                    CLI: init / pipeline / start mission LAT,LON / start coverage / status / rtl / land
 │   ├── install_sim_server.sh       native VM server install (Gazebo apt + PX4 built + Baylands)
 │   ├── run_sim_native.sh           native twin of px4-sim/entrypoint.sh (N drones, same ports)
 │   ├── install_telemetry_server.sh native telemetry stack (ROS 2 + XRCE agent + px4_msgs from PX4)

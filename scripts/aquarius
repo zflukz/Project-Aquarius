@@ -2,17 +2,19 @@
 # aquarius — one command for the Aquarius drone sim: start it, fly waypoints / coverage, check, stop.
 #
 #   aquarius init [local|server|control] [--drones N] [--world W] [--camera] [--headless]
-#                 [--control-host IP] [--build]
+#                 [--control-host IP] [--pipeline] [--build]
 #   aquarius drones [N]                  show / change the number of simulated drones (1-10), restarts the sim
 #   aquarius update [local|server|control] [--no-files]
 #                                        newest compose files + images, restart what changed (VM: pull only)
+#   aquarius pipeline [up|down|on|off]   data pipeline (Gazebo drones -> Kafka -> TimescaleDB -> Mission dashboard)
+#                                        up / down = start / stop now, on / off = also at every start (.env)
 #   aquarius start mission LAT,LON [LAT,LON ...] [--drone N] [--alt M] [--speed V] [--max-dist M] [--detach]
 #   aquarius start coverage [LAT,LON] [--size WxH] [--drones N] [--sweep M] [--alt M] [--detach]
 #   aquarius status [--drone N]          containers + armed / mode / battery / position
 #   aquarius rtl | land [--drone N]      return to launch / land now (stops a running mission script first)
 #   aquarius stop [--drone N]            = rtl
-#   aquarius logs [mission|coverage|px4|telemetry] [--drone N]
-#   aquarius urls                        Gazebo / QGC / camera / Grafana links
+#   aquarius logs [mission|coverage|px4|telemetry|pipeline] [--drone N]
+#   aquarius urls                        Gazebo / QGC / camera / Grafana / pipeline links
 #   aquarius down                        stop the containers
 #   aquarius install                     link this script to ~/.local/bin/aquarius
 #
@@ -48,7 +50,7 @@ use_docker() { running drone-control; }
 
 # --- options shared by the commands
 DRONE=${DRONE_ID:-0}; ALT=; SPEED=; MAXDIST=; DETACH=; SIZE=; SWEEP=; NDRONES=
-MODE=; WORLD=; CAMERA=; HEADLESS=; CONTROL_IP=; BUILD=; NOFILES=
+MODE=; WORLD=; CAMERA=; HEADLESS=; CONTROL_IP=; BUILD=; NOFILES=; PIPELINE=
 ARGS=()
 parse_opts() {
     while [ $# -gt 0 ]; do
@@ -64,6 +66,7 @@ parse_opts() {
             --control-host) CONTROL_IP=$2; shift ;;
             --camera)       CAMERA=1 ;;
             --headless)     HEADLESS=1 ;;
+            --pipeline)     PIPELINE=1 ;;
             --build)        BUILD=1 ;;
             --no-files)     NOFILES=1 ;;
             --detach|-d)    DETACH=1 ;;
@@ -223,6 +226,7 @@ cmd_init() {
     [ -n "$WORLD" ]      && set_env PX4_GZ_WORLD "$WORLD"
     [ -n "$HEADLESS" ]   && set_env HEADLESS 1
     if [ -n "$CAMERA" ]; then set_env PX4_SIM_MODEL gz_x500_mono_cam_down; set_env PX4_SYS_AUTOSTART 4014; fi
+    [ -n "$PIPELINE" ]   && [ "$MODE" != control ] && set_env COMPOSE_PROFILES pipeline
     if [ "$MODE" = server ]; then
         [ -n "$(get_env CONTROL_HOST)" ] \
             || die "server mode needs the control computer IP: aquarius init server --control-host <IP>"
@@ -309,6 +313,40 @@ cmd_update() {
     wait_ready
 }
 
+PIPELINE_SERVICES="kafka kafka-init db-migrate ingestion imagestream kafka-ui"
+
+cmd_pipeline() {   # up | down | on | off — compose profile `pipeline`
+    MODE=$(detect_mode)
+    [ "$MODE" = control ] && die "the pipeline runs on the VM (or locally) — run 'aquarius pipeline' there"
+    local file; file=$(compose_file "$MODE")
+    [ -f "$DOCKER_DIR/.env" ] || die "no $DOCKER_DIR/.env — run 'aquarius init' first"
+    cd "$DOCKER_DIR"
+    case "${ARGS[0]:-}" in
+        "")
+            echo "COMPOSE_PROFILES=$(get_env COMPOSE_PROFILES)   (pipeline = also started by init / update / up -d)"
+            docker ps -a --format '    {{.Names}}\t{{.Status}}' | grep -wE "${PIPELINE_SERVICES// /|}" \
+                || echo "    pipeline not running — aquarius pipeline up"
+            return ;;
+        on)   set_env COMPOSE_PROFILES pipeline; info "COMPOSE_PROFILES=pipeline saved in .env" ;&
+        up)
+            info "starting the pipeline ($file --profile pipeline)"
+            # only the pipeline services (+ timescaledb they depend on) — the running sim is left alone
+            # shellcheck disable=SC2086
+            if [ "$MODE" = local ]; then docker compose -f "$file" --profile pipeline up -d ${BUILD:+--build} $PIPELINE_SERVICES
+            else docker compose -f "$file" --profile pipeline pull -q $PIPELINE_SERVICES \
+                 && docker compose -f "$file" --profile pipeline up -d $PIPELINE_SERVICES; fi
+            info "telemetry's bridge sends the Gazebo drones to Kafka as soon as the topics exist: aquarius logs pipeline"
+            cmd_urls ;;
+        off)  set_env COMPOSE_PROFILES ""; info "COMPOSE_PROFILES cleared in .env" ;&
+        down)
+            info "stopping the pipeline (Kafka data stays in the kafka-data volume, tables in TimescaleDB)"
+            # shellcheck disable=SC2086
+            docker compose -f "$file" --profile pipeline rm -sf $PIPELINE_SERVICES ;;
+            # (telemetry's bridge notices Kafka is gone, stops and waits — the sim keeps running)
+        *) die "pipeline: up | down | on | off" ;;
+    esac
+}
+
 cmd_urls() {
     running px4-sim || return 0
     local h=localhost gz=8080
@@ -324,6 +362,10 @@ cmd_urls() {
     if running grafana; then
         # camera panel loads the MJPEG from the browser -> needs the VM address, not localhost
         echo "    Grafana     http://$h:3000/d/aquarius-fleet?var-cam=http://$h:8083"
+    fi
+    if running kafka; then
+        echo "    Mission     http://$h:3000/d/aquarius-mission?var-stream_url=http://$h:8090"
+        echo "    Kafka UI    http://$h:8084"
     fi
 }
 
@@ -349,7 +391,7 @@ cmd_start() {
 }
 
 cmd_status() {
-    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|timescaledb|grafana" || true
+    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|timescaledb|grafana|kafka|ingestion|imagestream" || true
     for j in mission coverage; do
         local p; p=$(job_pid $j)
         [ -n "$p" ] && echo "    $j running for drone $DRONE (aquarius logs $j)"
@@ -371,7 +413,8 @@ cmd_logs() {
         mission|coverage) follow "${ARGS[0]:-mission}" ;;
         px4)       docker logs -f --tail 100 px4-sim ;;
         telemetry) docker logs -f --tail 100 telemetry ;;
-        *)         die "logs: mission | coverage | px4 | telemetry" ;;
+        pipeline)  { docker logs -f --tail 50 telemetry 2>&1 | grep --line-buffered '^\[kafka\]' & docker logs -f --tail 20 ingestion 2>&1; } ;;
+        *)         die "logs: mission | coverage | px4 | telemetry | pipeline" ;;
     esac
 }
 
@@ -398,6 +441,7 @@ case "$CMD" in
     init)       cmd_init ;;
     drones)     cmd_drones ;;
     update)     cmd_update ;;
+    pipeline)   cmd_pipeline ;;
     start)      cmd_start ;;
     status)     cmd_status ;;
     rtl|stop)   cmd_action rtl ;;

@@ -15,7 +15,7 @@ N="${1:-3}"
 MODEL="${MODEL:-x500_mono_cam_down}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 SPACING="${SPACING:-3}"                       # metres between drones on the ground
-LOG_DIR="${LOG_DIR:-$HOME/aquarius-data/results/sitl_logs}"
+LOG_DIR="${LOG_DIR:-$(cd "$(dirname "$0")/../.." && pwd)/results/sitl_logs}"   # Data-Pipeline/results
 # PX4_TIMESYNC=0 (default here): PX4 keeps its own (= Gazebo sim) clock in its timestamps
 # instead of mapping them onto the computer's wall clock. With the bridge on
 # use_sim_time:=true, images and telemetry then share ONE clock even when Gazebo runs

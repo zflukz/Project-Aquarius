@@ -69,7 +69,7 @@ def default_schema_dir() -> str:
     if env:
         return env
     here = os.path.dirname(os.path.abspath(__file__))
-    for cand in (os.path.join(here, "..", "..", "schemas"), os.path.join(here, "..", "schemas"), "/app/schemas"):
+    for cand in (os.path.join(here, "..", "..", "..", "Data-Pipeline", "schemas"), "/app/schemas"):
         if os.path.isdir(cand):
             return os.path.abspath(cand)
     raise FileNotFoundError("schemas/ directory not found; set SCHEMA_DIR")

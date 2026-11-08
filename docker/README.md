@@ -1,551 +1,312 @@
-# Docker — Simulation & Control
+# Docker — simulation, telemetry, dashboards, data pipeline
 
-Everything for running the PX4 + Gazebo simulator and the drone-control station lives here.
+Everything that runs in a container lives here. App code that is not a container: `../Drone-Control/` (flight
+scripts), `../Data-Pipeline/` (ROS 2 → Kafka bridge source, JSON schemas, test tools).
 
 ```
 docker/
-├── README.md                    this file
-├── baylands_setup_guide.md      Baylands world: pre-cache + troubleshooting
-├── telemetry_plan.md            telemetry list + plan (sensors, battery, camera → server)
-├── bench_sim.sh                 performance test: native PX4/Gazebo vs Docker compose on the VM
-├── .env.example                 copy to .env — REGISTRY, CONTROL_HOST, PX4_NUM_DRONES, ...
-├── compose.local.yml            LOCAL TEST: all containers on your computer (+ build & push images)
-├── compose.server.yml           VM SERVER: pull images only (no build) — sim + telemetry + Grafana
-├── compose.control.yml          CONTROL COMPUTER: drone-control only
-├── px4-sim/
-│   ├── Dockerfile               Ubuntu 24.04 + Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
-│   └── entrypoint.sh            starts N PX4 instances, MAVLink links → CONTROL_HOST
-├── telemetry/
-│   ├── Dockerfile               ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video + pymavlink/paho
-│   ├── entrypoint.sh            telemetry topics + camera view + MQTT bridge (also run by scripts/run_telemetry_native.sh)
-│   └── mavlink_mqtt.py          PX4 MAVLink (all drones, udp 14700) → MQTT aquarius/<fleet>/drone/<i>/<stream>
-├── grafana/
-│   ├── Dockerfile               Grafana + provisioning baked in (image aquarius-grafana, pulled on the VM)
-│   ├── provisioning/            TimescaleDB datasource (PostgreSQL) + dashboard provider
-│   └── dashboards/aquarius.json dashboard "Aquarius — Fleet telemetry"
-└── drone-control/
-    ├── Dockerfile               Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK + Drone-Control/*.py
-    ├── entrypoint.sh            sources ROS 2, runs $AUTO_RUN once (e.g. MCPP flight), then idles
-    └── Dockerfile.dockerignore  only Drone-Control/ goes into the build context
+├── compose.local.yml      LOCAL: everything on your computer, builds + pushes the images
+├── compose.server.yml     VM: pull only, host network — sim, telemetry, dashboards, pipeline
+├── compose.control.yml    CONTROL COMPUTER: drone-control only
+├── .env.example           copy to .env (all settings, comments explain each one)
+├── px4-sim/               PX4 SITL ×N + Gazebo Harmonic + Baylands cache + Xvfb/VNC + QGroundControl
+├── telemetry/             ROS 2: XRCE agent, Gazebo bridge, camera web view, MAVLink→MQTT, ROS 2→Kafka bridge
+├── grafana/               Grafana + datasource + dashboards (aquarius.json Fleet, mission.json Mission)
+├── db/migrations/         pipeline tables / functions (applied by db-migrate), db/tests/ = checks
+├── ingestion/             Kafka → TimescaleDB consumer + migration runner (image aquarius-ingestion)
+├── imagestream/           Kafka image-frames → MJPEG for the Mission dashboard
+├── drone-control/         ROS 2 + MAVSDK + Drone-Control/*.py
+├── bench_sim.sh           native vs Docker performance test
+├── telemetry_plan.md · communication_plan.md · baylands_setup_guide.md   background / plans
 ```
 
-Images (set by `REGISTRY` / `TAG` in `.env`):
-
-| Image | Built from | Used by |
+| Image (`REGISTRY`/`TAG` in `.env`) | Built from | Runs in |
 | :--- | :--- | :--- |
-| `ghcr.io/zflukz/aquarius-px4-sim:latest` | `px4-sim/` | `compose.local.yml`, `compose.server.yml` |
-| `ghcr.io/zflukz/aquarius-telemetry:latest` | `telemetry/` | `compose.local.yml`, `compose.server.yml` |
-| `ghcr.io/zflukz/aquarius-grafana:latest` | `grafana/` | `compose.local.yml`, `compose.server.yml` (+ public `eclipse-mosquitto:2`, `telegraf:1.36`, `timescale/timescaledb:2.22.1-pg17`) |
-| `ghcr.io/zflukz/aquarius-drone-control:latest` | `drone-control/` + `../Drone-Control/` | `compose.local.yml`, `compose.control.yml` |
+| `aquarius-px4-sim` | `px4-sim/` | local, server |
+| `aquarius-telemetry` | `telemetry/` + `../Data-Pipeline/ros2_ws` (build context `pipeline`) | local, server |
+| `aquarius-grafana` | `grafana/` | local, server |
+| `aquarius-ingestion` | `ingestion/` + `db/migrations/` + `../Data-Pipeline/schemas/` | local, server (profile pipeline) |
+| `aquarius-imagestream` | `imagestream/` | local, server (profile pipeline) |
+| `aquarius-drone-control` | `drone-control/` + `../Drone-Control/` | local, control |
 
-> Shortcut: `scripts/aquarius init [local|server|control]`, `aquarius start mission LAT,LON ...`,
-> `aquarius status` / `rtl` / `land` — guide: [`../AQUARIUS_CLI.md`](../AQUARIUS_CLI.md).
+Public images: `eclipse-mosquitto:2`, `telegraf:1.36`, `timescale/timescaledb-ha:pg17.6-ts2.22.1` (TimescaleDB +
+PostGIS), `apache/kafka:3.8.0`, `provectuslabs/kafka-ui`, `dougw/novnc`.
 
-## The three modes
-
-```
- ① LOCAL TEST (your computer)           ② publish            ③ SPLIT
- compose.local.yml                       docker compose push   VM server               Control computer
- ┌──────────────────────────────┐       ─────────────────►    compose.server.yml      compose.control.yml
- │ px4-sim ─UDP─► drone-control │        ghcr.io registry      (pull only)             (pull or build)
- │ novnc :8080                  │       ◄─────────────────     px4-sim ──── UDP ────►  drone-control
- └──────────────────────────────┘          docker pull         novnc :8081             QGroundControl
-```
-
-Develop and test everything locally (①). When it works, push the images (②). The VM only pulls
-and runs them (③).
+The `aquarius` command (`../scripts/aquarius`, guide [`../AQUARIUS_CLI.md`](../AQUARIUS_CLI.md)) wraps everything
+below: `aquarius init`, `drones N`, `pipeline up`, `start mission …`, `status`, `rtl`, `urls`, `update`.
 
 ---
 
-## ① Local test — all containers on your computer
+## Data flow
+
+```
+                    ┌ MAVLink 14640+i ─► drone-control (MAVSDK scripts)          control
+                    ├ MAVLink 18640+i ─► QGroundControl                          control
+ PX4 drone i ───────┼ MAVLink 14740+i ─► telemetry: mavlink_mqtt.py ─► Mosquitto ─► Telegraf ─┐
+ (px4-sim, Gazebo)  │                                                                         ├► TimescaleDB ─► Grafana :3000
+                    └ uXRCE-DDS :8888 ─► telemetry: ROS 2 topics ─► aquarius_bridge ─► Kafka ─► ingestion ┘   (+PostGIS)
+                      Gazebo camera ───► ros_gz_bridge ─┬► web_video_server :8083           └► imagestream :8090
+                                                        └► aquarius_bridge (JPEG, 2 fps) ─► Kafka image-frames
+```
+
+- **Always on:** MAVLink → MQTT → Telegraf → TimescaleDB → Grafana **Fleet telemetry** (live state, map, history).
+- **Profile `pipeline`:** the Gazebo drones' ROS 2 topics → Kafka → TimescaleDB → Grafana **Mission monitor**
+  (missions, search grid, coverage %, detections, survivor pins, camera of every drone). Same database, one Grafana.
+- Commands (arm, mission, offboard) never go through MQTT or Kafka — only direct MAVLink.
+
+---
+
+## ① Local — everything on your computer
 
 ```bash
+cd docker && cp .env.example .env          # first time
+docker compose -f compose.local.yml up -d --build      # or: aquarius init --camera
+docker compose -f compose.local.yml logs -f px4-sim    # ready: "drone0 (sysid 1) -> ..."
+```
+
+| What | URL |
+| :--- | :--- |
+| Gazebo / QGroundControl (noVNC) | <http://localhost:8080/vnc.html> / <http://localhost:8082/vnc.html> |
+| Drone camera (ROS) | <http://localhost:8083/> (camera model only) |
+| Grafana (admin / `GRAFANA_ADMIN_PASSWORD`) | <http://localhost:3000> — Fleet is the home page |
+| Pipeline: Mission camera / Kafka UI | <http://localhost:8090/> / <http://localhost:8084> |
+| SQL | `psql -h localhost -U aquarius aquarius` (password `TSDB_PASSWORD`) |
+
+Run scripts in drone-control (`CONTROL_HOST=drone-control`, so MAVLink takes the same path as in the split setup):
+
+```bash
+docker compose -f compose.local.yml exec drone-control bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
+docker compose -f compose.local.yml exec -e DRONE_ID=1 drone-control python3 teleop_drone.py
+```
+
+After editing `Drone-Control/*.py`: `up -d --build drone-control`. Stop: `down` (`-v` also deletes the Fuel cache,
+the database and Kafka data).
+
+## ② Publish images
+
+```bash
+echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin     # token with write:packages
 cd docker
-cp .env.example .env                     # first time only; CONTROL_HOST is not needed locally
-
-docker compose -f compose.local.yml up -d --build
-docker compose -f compose.local.yml logs -f px4-sim      # wait for "Ready for takeoff!"
+export PX4_REF=$(docker run --rm --entrypoint git ghcr.io/zflukz/aquarius-px4-sim -C /px4 rev-parse HEAD)  # px4_msgs = PX4
+docker compose -f compose.local.yml --profile pipeline build
+docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana ingestion imagestream drone-control
 ```
 
-- Gazebo view: <http://localhost:8080/vnc.html>
-- QGroundControl view: <http://localhost:8082/vnc.html> (`QGC=1`)
-- Dashboard: <http://localhost:3000> (Grafana, `admin` / `GRAFANA_ADMIN_PASSWORD`, default `admin`) — see [dashboard](#dashboard-grafana)
-- Drone camera: <http://localhost:8083/> (camera model only, also inside the Grafana dashboard)
-  (see [Telemetry & camera view](#telemetry--camera-view))
-- Run the control scripts inside `drone-control`:
+`TAG=v0.3` in front of both commands for a versioned release. GHCR packages start **private**: make them public or
+`docker login ghcr.io` on the VM (token with `read:packages`).
 
-```bash
-docker compose -f compose.local.yml exec drone-control \
-  bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
+## ③ Split — VM server + control computer
 
-docker compose -f compose.local.yml exec -e DRONE_ID=1 drone-control \
-  bash -c "source /opt/ros/jazzy/setup.bash && python3 teleop_drone.py"
-```
-
-Here `CONTROL_HOST=drone-control` (Docker DNS), so MAVLink takes the same path as in the split setup.
-That means a passing local test is a good check before you deploy to the VM.
-
-After editing `Drone-Control/*.py`, rebuild only the control image:
-`docker compose -f compose.local.yml up -d --build drone-control`.
-
-Stop: `docker compose -f compose.local.yml down` (add `-v` to also drop the Fuel cache volume).
-
----
-
-## ② Publish images (from your computer)
-
-One-time login to GitHub Container Registry. Create a token at GitHub → Settings → Developer settings →
-Personal access tokens (classic) with the `write:packages` scope:
-
-```bash
-echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin
-```
-
-Build and push. These are the same images you just tested locally:
-
-```bash
-cd docker
-# telemetry: px4_msgs must match px4-sim's PX4 commit (Git Bash: prefix MSYS_NO_PATHCONV=1)
-export PX4_REF=$(docker run --rm --entrypoint git ghcr.io/zflukz/aquarius-px4-sim -C /px4 rev-parse HEAD)
-docker compose -f compose.local.yml build
-docker compose -f compose.local.yml push px4-sim telemetry grafana drone-control
-
-# versioned release (keep latest too)
-TAG=v0.2 docker compose -f compose.local.yml build
-TAG=v0.2 docker compose -f compose.local.yml push px4-sim telemetry grafana drone-control
-```
-
-> `aquarius-px4-sim` is large (PX4 build + Gazebo + Baylands, several GB). The first push takes a while;
-> later pushes upload only the changed layers.
->
-> New GHCR packages are **private**. Either make them public (GitHub → Packages → package →
-> Settings → Change visibility), or `docker login ghcr.io` on the VM with a `read:packages` token.
-
----
-
-## ③ Split — VM server (pull only) + control computer
-
-### What runs where
-
-| Machine | Compose file | Containers |
+| Machine | File | Runs |
 | :--- | :--- | :--- |
-| **VM server** | `compose.server.yml` | `px4-sim` (PX4 ×N + Gazebo + QGC), `novnc` :8081, `novnc-qgc` :8082, `telemetry` (camera :8083, MAVLink → MQTT), **`mosquitto` :1883, `timescaledb` (127.0.0.1:5432), `telegraf`, `grafana` :3000** |
-| **Control computer** | `compose.control.yml` | `drone-control` (MAVSDK scripts / `aquarius start ...`), udp 14540-14549 |
+| VM | `compose.server.yml` | px4-sim, novnc :8081, novnc-qgc :8082, telemetry (:8083), mosquitto :1883/:9001, timescaledb (127.0.0.1:5432), telegraf, grafana :3000; profile pipeline: kafka :9092, ingestion, imagestream :8090, kafka-ui :8084 |
+| Control computer | `compose.control.yml` | drone-control, udp 14540-14549 |
 
-Grafana belongs on the VM: telemetry reads PX4's 3rd MAVLink link on `127.0.0.1:14700` there, and the flight history
-(TimescaleDB) stays where the sim runs. Open it from any browser on the LAN / VPN: `http://<VM_IP>:3000`.
-
-### VM server — pull only, no build
-
-The VM never builds images; it pulls what you pushed in ②. It needs the compose file, `.env` and (recommended) the
-`aquarius` command. Two ways to get them:
+VM — pull only, never builds. Clone the repo (recommended) or copy `compose.server.yml`, `.env.example` and
+`scripts/aquarius` into one folder:
 
 ```bash
-# a) clone the repo (recommended — the repo is private, use a GitHub token with repo read as password)
 git clone -b feature-Network-flukez https://github.com/zflukz/Project-Aquarius.git ~/Project-Aquarius
-cd ~/Project-Aquarius && bash scripts/aquarius install
-
-# b) only the files, copied from your computer
-#   scp docker/compose.server.yml docker/.env.example scripts/aquarius user@<VM_IP>:~/aquarius/
-#   then: bash ~/aquarius/aquarius install   (finds compose.server.yml next to itself; .env is created there)
+bash ~/Project-Aquarius/scripts/aquarius install
+aquarius init server --control-host <CONTROL_IP> --drones 2      # + --headless --camera --pipeline
+aquarius drones 4         # change the drone count (recreates px4-sim + telemetry)
+aquarius update           # git pull / download compose file → pull → up -d → prune
 ```
 
-Start with the number of drones you want (saved in `.env`):
+Without the CLI: `cp .env.example .env`, set `CONTROL_HOST`, `GRAFANA_ADMIN_PASSWORD`, `TSDB_PASSWORD` (only applied to
+empty volumes), then `docker compose -f compose.server.yml pull && … up -d`.
 
-```bash
-aquarius init server --control-host <CONTROL_IP> --drones 2      # + --headless, --camera, --world default
-```
+Control computer: `aquarius init control` (or `docker compose -f compose.control.yml up -d`). Open udp 14540-14549 +
+14550 for the VM. Links: Gazebo `http://<VM_IP>:8081/vnc.html`, QGC `:8082`, Grafana
+`http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (`aquarius urls` prints all of them).
 
-Without the CLI it is the same as:
-
-```bash
-cd ~/Project-Aquarius/docker        # or ~/aquarius
-cp .env.example .env
-nano .env        # CONTROL_HOST=<control computer IP>, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, GRAFANA_ADMIN_PASSWORD
-
-docker compose -f compose.server.yml pull
-docker compose -f compose.server.yml up -d
-docker compose -f compose.server.yml logs -f px4-sim
-```
-
-Ready when each drone logs:
-
-```text
-[drone0] INFO  [commander] Ready for takeoff!
-drone0 (sysid 1) -> 192.168.1.50:14540 [MAVSDK], :14550 [QGC]
-```
-
-Change the number of drones (px4-sim **and** telemetry must restart — telemetry builds its topics / camera bridge /
-MQTT streams per drone):
-
-```bash
-aquarius drones 4
-# = set PX4_NUM_DRONES=4 (and NUM_DRONES=4) in .env, then
-docker compose -f compose.server.yml up -d --force-recreate px4-sim telemetry
-```
-
-Update after you pushed new images (② on your computer):
-
-```bash
-aquarius update
-# = git pull --ff-only (repo clone), then
-docker compose -f compose.server.yml pull && docker compose -f compose.server.yml up -d && docker image prune -f
-```
-
-`up -d` restarts only the containers whose image or settings changed; `.env` is kept. Without a clone,
-`aquarius update` downloads the compose file from raw GitHub — that only works once the repo is public (else
-`scp` the files and run `aquarius update --no-files`).
-
-Firewall on the VM (only if `ufw` is enabled):
-
-```bash
-sudo ufw allow from <CONTROL_IP> to any port 14640:14649 proto udp
-sudo ufw allow from <CONTROL_IP> to any port 18640:18649 proto udp
-sudo ufw allow from <CONTROL_IP> to any port 8081 proto tcp     # noVNC Gazebo
-sudo ufw allow from <CONTROL_IP> to any port 8082 proto tcp     # noVNC QGroundControl
-sudo ufw allow from <CONTROL_IP> to any port 8083 proto tcp     # drone camera (web_video_server)
-sudo ufw allow from <CONTROL_IP> to any port 3000 proto tcp     # Grafana dashboard
-sudo ufw allow from <CONTROL_IP> to any port 1883 proto tcp     # MQTT (only if the control computer subscribes)
-```
-
-> noVNC / x11vnc / web_video_server / Mosquitto have **no password** (Grafana has a login, TimescaleDB only
-> listens on 127.0.0.1). Keep ports 8081-8083 / 1883 / 9001 / 3000 limited to your LAN / VPN.
-
-### Control computer
-
-```bash
-aquarius init control                                     # or:
-cd docker
-docker compose -f compose.control.yml up -d               # pulls the image (or add --build)
-
-docker compose -f compose.control.yml exec drone-control \
-  bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
-
-docker compose -f compose.control.yml exec -e DRONE_ID=1 drone-control \
-  bash -c "source /opt/ros/jazzy/setup.bash && python3 teleop_drone.py"
-```
-
-- Open `14540-14549/udp` and `14550/udp` (QGroundControl) for the VM IP.
-- Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`,
-  dashboard: `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083`
-- Several drones: `aquarius start coverage --drones N` / `aquarius start mission ... --drone i` (drone i = udp 14540+i)
-- Update: `aquarius update control` (pulls the newest `aquarius-drone-control`)
-- Without Docker the scripts work natively too: `DRONE_ID=1 python3 Drone-Control/teleop_drone.py`
-- Don't run `compose.local.yml` at the same time (same container name and ports).
+VM firewall (ufw): allow from the control computer udp 14640:14649, 18640:18649 and tcp 8081-8084, 8090, 3000
+(1883 / 9092 only if it subscribes MQTT / Kafka). noVNC, web video, imagestream, Kafka UI, Mosquitto and Kafka have
+**no login** — LAN / VPN only.
 
 ---
 
-## MCPP coverage flight — auto path over the map
+## Data pipeline (profile `pipeline`)
 
-`Drone-Control/mcpp_mission.py` = Multi-robot Coverage Path Planning:
+Real data from the Gazebo drones — no fake producer needed. Off by default (Kafka costs ~0.5–1 GB RAM).
 
-1. area (rectangle `AREA_W` × `AREA_H` m around drone 0's home) → grid of `2·SWEEP` m cells
-2. balanced split: each drone grows a connected region from its start, smallest region grows next
-3. per region: spanning tree (long straight lines preferred) → **Spanning Tree Coverage** path that
-   visits every `SWEEP` m sub-cell exactly once (lawnmower-like, `SWEEP` = line spacing)
-4. path → lat/lon waypoints → PX4 **mission** → takeoff, mission, RTL, land.
-   Drone `i` flies at `ALT + 3·i` m so transit legs cannot collide.
-
-Because it is a real mission, **QGroundControl (noVNC) shows every drone's planned path** on the map
-and the progress live (QGC view: <http://localhost:8082/vnc.html>).
-
-```bash
-# by hand (drone-control already running)
-docker compose -f compose.local.yml exec drone-control   bash -c "source /opt/ros/jazzy/setup.bash && python3 mcpp_mission.py"
-docker compose -f compose.local.yml exec -e NUM_DRONES=2 drone-control   bash -c "source /opt/ros/jazzy/setup.bash && python3 mcpp_mission.py"
-docker compose -f compose.local.yml exec drone-control python3 mcpp_mission.py --plan-only -n 3
-
-# automatically on start: in .env
-#   AUTO_RUN=python3 mcpp_mission.py
-#   NUM_DRONES=2            # = PX4_NUM_DRONES
-docker compose -f compose.local.yml up -d --force-recreate drone-control
-docker logs -f drone-control
-```
-
-```text
-MCPP grid: 6 x 8 cells of 10 m  (north up, digit = drone)
-  1 1 1 1 0 0 0 0
-  ...
-  drone0: 24 cells, 26 waypoints, 475 m
-  drone1: 24 cells, 24 waypoints, 475 m
-```
-
-| Env (drone-control) | Default | Meaning |
+| Way | How | When |
 | :--- | :--- | :--- |
-| `AUTO_RUN` | – | command run once at container start |
-| `NUM_DRONES` | `1` | drones flown together (drone `i` on udp `14540+i`, from `DRONE_ID`) |
-| `AREA_W` / `AREA_H` | `80` / `60` | area east-west / north-south, m |
-| `AREA_N` / `AREA_E` | `0` / `0` | area centre offset from drone 0 home, m |
-| `SWEEP` | `5` | distance between flight lines, m |
-| `ALT` / `SPEED` | `20` / `5` | altitude m (drone `i`: `+3·i`), speed m/s |
+| **A — on demand** | `aquarius pipeline up` / `aquarius pipeline down` (= `docker compose -f <file> --profile pipeline up -d`) | experiments, VM short on RAM |
+| **B — always on** | `aquarius pipeline on` / `off` or `aquarius init --pipeline` (= `COMPOSE_PROFILES=pipeline` in `.env`) | every `up`, `update`, reboot |
 
-> With `compose.control.yml` (`restart: unless-stopped`) `AUTO_RUN` flies again every time the
-> container restarts — leave it empty there unless that is what you want.
-> Keep the area inside the Baylands park; trees / buildings are not modelled as obstacles.
+Services: `kafka` (KRaft, one node), `kafka-init` (5 topics, exits), `db-migrate` (applies `db/migrations`, exits),
+`ingestion`, `imagestream`, `kafka-ui`. The sender is **`aquarius_bridge` inside `telemetry`**: it waits until Kafka
+and its topics exist, then publishes every drone — so `pipeline up` works without restarting the sim.
 
----
-
-## Performance test — native vs Docker (`bench_sim.sh`)
-
-Runs the same workload (N drones idle in one world, no GUI / QGC) natively and in Docker, one after
-the other, and compares them. Run on the VM with nothing else running:
-
-```bash
-# on the VM: compose.server.yml + .env next to the script; native PX4 built in ~/PX4-Autopilot
-#   (bash scripts/install_sim_server.sh — installs Gazebo, builds PX4, caches Baylands)
-chmod +x bench_sim.sh
-./bench_sim.sh both                         # native, then docker -> table
-DRONES=3 DURATION=120 ./bench_sim.sh both   # heavier load shows the difference better
-./bench_sim.sh docker                       # only one mode
-COMPOSE_FILE=compose.local.yml ./bench_sim.sh docker   # on your PC
-```
-
-```text
-mode    drones  boot_s  ready_s     rtf    cpu_%    rss_mb  px4
-native       1   17.70    17.72   1.006    76.83    731.12  9a1429ae
-docker       1   40.34    40.71   1.018    79.88    690.70  9a1429ae
-```
-
-| Column | Meaning | Better |
-| :--- | :--- | :--- |
-| `boot_s` | start → all PX4 finished rcS | lower |
-| `ready_s` | start → all have a valid home position (GPS + EKF) | lower |
-| `rtf` | Gazebo real-time factor over `DURATION` s (1.0 = real time) | **higher, the main number** |
-| `cpu_%` | CPU of px4 + gz processes (100 = 1 core) | lower |
-| `rss_mb` | their memory | lower |
-
-- Every run is appended to `bench_results.csv`. Repeat 3× and compare averages; with `DRONES` > 1 the
-  RTF drops first where the overhead is.
-- Same PX4 version in both? Check the `px4` column (`git describe`); a different PX4 commit is not a fair test.
-- Docker `boot_s` includes container start, Xvfb / VNC and Baylands cache check.
-- On Linux both modes are measured from `/proc`. On Docker Desktop (Windows / macOS) Docker mode falls
-  back to `docker stats` (whole container), so only compare both modes on the Linux VM.
-- Env: `DRONES` `WORLD` `MODEL` `AUTOSTART` `WARMUP` (20) `DURATION` (60) `HEADLESS` (1, empty = GUI)
-  `PX4_DIR` (`~/PX4-Autopilot`) `COMPOSE_FILE` (`compose.server.yml`) `RESULTS`.
-
-## MAVLink port map
-
-Drone `i` = PX4 instance `i` = MAVLink system id `i+1`.
-
-| Link | PX4 listens (sim) | PX4 sends to (control) | Used by |
+| Drone | `drone_id` | PX4 topics | Camera |
 | :--- | :--- | :--- | :--- |
-| Offboard / API | `14640 + i` | `CONTROL_HOST : 14540 + i` | MAVSDK scripts (`DRONE_ID=i`) |
-| GCS | `18640 + i` | `CONTROL_HOST : 14550` | QGroundControl (all drones on one port) |
+| 0 | `uav0` | `/fmu/out/*` | `/uav_0/camera/image_raw` |
+| i | `uav<i>` | `/uav_i/fmu/out/*` | `/uav_i/camera/image_raw` |
 
-PX4 opens both links itself (`mavlink start ... -t CONTROL_HOST` in `px4-sim/entrypoint.sh`).
-The control side only **listens** (`udpin://0.0.0.0:14540+i`), so it never needs the VM IP.
+- Telemetry 10 Hz per drone (position, attitude, battery, nav state, armed); camera as JPEG at `BRIDGE_IMAGE_FPS`
+  (camera model only: `aquarius init --camera`).
+- Time (A4): sim time. PX4 timestamps are mapped onto the Gazebo clock (offset estimate), images keep their Gazebo
+  stamp, so both share one clock. When Gazebo runs slower than real time (RTF < 1) `ts` falls behind the wall clock —
+  latency numbers are only meaningful at RTF ≈ 1.
+- One mission per telemetry start (`MISSION_ID` empty = new UUID; `aquarius drones` / restart → new mission).
+- Check it: `aquarius logs pipeline` (bridge `[stats]` every 10 s, ingestion counts), Kafka UI, or SQL
+  `SELECT drone_id, count(*), max(ts) FROM telemetry WHERE received_at > now() - interval '1 minute' GROUP BY 1;`
+
+**Kafka topics** (`KAFKA_PARTITIONS` = max drones, set before the first start): `telemetry` (7 d), `image-frames`
+(1 d, ≤ 2 GB/partition, 2 MB messages), `detections` (7 d), `survivors` (30 d), `replanning-events` (1 partition, 30 d).
+Messages follow `../Data-Pipeline/schemas/*.schema.json`; ingestion validates each one, bad ones go to
+`ingest_rejects` with the reason. Inserts are batched (500 / 1 s) with `ON CONFLICT DO NOTHING`, Kafka offsets
+committed after the DB commit → a crash replays but never duplicates.
+
+**Tables** (`db/migrations`, add a new numbered file — never edit an applied one): `missions`, `drones`, `telemetry`
+(hypertable, compressed after 7 d, never deleted), `detections`, `survivors`, `replanning_events`, `ingest_rejects`,
+`search_area`, `grid_cells`, `flight_paths` (planned / flown), `persons` (merged survivor pins, `MERGE_RADIUS_M`),
+`ground_truth_persons`, view `survivor_pins`. Telegraf's tables (`"position"`, `"status"`, …) sit in the same DB.
+
+```sql
+SELECT aq_create_search_area('<mission>', '<geojson polygon>', 'Zone A', 20);   -- area + 20 m grid
+SELECT * FROM aq_coverage('<area>', 'flown', 30);    -- coverage % from the flown track, 30 m camera swath
+SELECT * FROM aq_flown_paths('<mission>');           SELECT aq_save_flown_paths('<mission>');
+SELECT aq_remerge_survivors('<mission>', 5.0);
+```
+
+Coordinates are stored as EPSG:4326 and measured in the area's UTM zone (`aq_utm_srid`, Baylands → 32610).
+
+**Mission monitor dashboard** (`grafana/dashboards/mission.json`, generated by `grafana/build_dashboards.py`, panel SQL
+in migration 0007): coverage, survivors, detections, active drones, rejects; map with grid / planned / flown paths /
+drones / pins; drone status table; battery / altitude; camera grid (`stream_url` variable — off this computer set
+`http://<host>:8090`, `aquarius urls` prints the link); pipeline latency p50/p95 and Hz per drone.
+
+**Tools** (`../Data-Pipeline/tools/`, run from `Data-Pipeline/`; `COMPOSE=compose.server.yml` on the VM):
+
+| Tool | Does |
+| :--- | :--- |
+| `phase_c_check.sh` | migrations on a throwaway DB + every check in `db/tests` + all Mission panel queries |
+| `phase_b_check.sh [s]` | services, topics, data per drone, images, time sync, rows, duplicates, rejects |
+| `check_dedupe.sh` | replays all Kafka data, must create 0 duplicate rows |
+| `pipeline_stats.py`, `check_time_sync.py`, `save_images.py` | loss / latency / image size, image↔telemetry sync, save JPEGs |
+| `demo_mission.py` | area + plan + 8 planted people; `--print-fly-command` flies fake drones (no Gazebo) |
+| `sim_producer.py` | fake drones straight into Kafka — offline testing only |
+| `dds/` | Fast DDS discovery server + `netem` bad Wi-Fi, for ROS 2 across machines (T3) |
+| `sitl/start_swarm.sh`, `make_cam_bridge.py` | native SITL without Docker (`config/bridge_sitl.yaml`) |
+
+Unit tests: `python3 -m pytest Data-Pipeline/ros2_ws/src/aquarius_bridge/test Data-Pipeline/tools docker/ingestion/tests docker/imagestream/tests`.
+
+Bandwidth at 10 drones: telemetry ~30 KB/s; images 2 fps × 30–165 KB ≈ 0.6–3.3 MB/s — lower `BRIDGE_IMAGE_FPS` first.
 
 ---
+
+## Dashboards (Grafana)
+
+- **Fleet telemetry** (`aquarius.json`, uid `aquarius-fleet`): link / armed / mode / battery / altitude / satellites
+  per drone, satellite map with track, camera (`var-cam`), altitude / speed / climb, mode timeline, mission waypoint,
+  battery, GPS, sensors, events, roll / pitch. Telegraf turns MQTT `aquarius/<fleet>/drone/<i>/<stream>` into one
+  hypertable per stream (1-day chunks, `TSDB_RETENTION`).
+- **Mission monitor** (`mission.json`, uid `aquarius-mission`): see the pipeline section.
+- Datasource `TimescaleDB` (uid `aquarius-tsdb`) for both. Edit Fleet in the UI → Export JSON into
+  `grafana/dashboards/aquarius.json`; Mission in `build_dashboards.py`. Then rebuild `aquarius-grafana`.
+- Raw: `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v`, `docker exec -it timescaledb psql -U aquarius aquarius`
+  (VM: `ssh -L 5432:127.0.0.1:5432 <vm>`). Quote `"position"` (SQL keyword).
+- Mosquitto / Telegraf / DB-init / Kafka-topics configs are inline `configs:` in both compose files (Compose ≥ 2.23.1,
+  `mode: 0444`) — keep both in sync.
+
+---
+
+## MCPP coverage flight
+
+`Drone-Control/mcpp_mission.py`: area `AREA_W`×`AREA_H` around drone 0 → grid of `2·SWEEP` cells → balanced split per
+drone → spanning tree → Spanning Tree Coverage path → PX4 mission (QGC shows it) → takeoff, mission, RTL. Drone `i` flies
+at `ALT + 3·i`. Run: `aquarius start coverage [LAT,LON] --size 40x30 --drones 2`, or `exec drone-control python3
+mcpp_mission.py` (`--plan-only` prints the plan), or `AUTO_RUN=python3 mcpp_mission.py` in `.env` (runs at every
+container start).
+
+## Ports (drone `i` = PX4 instance `i` = sysid `i+1`)
+
+| Link | PX4 binds | PX4 sends to | Used by |
+| :--- | :--- | :--- | :--- |
+| MAVSDK | 14640+i | `CONTROL_HOST`:14540+i | `DRONE_ID=i` scripts |
+| QGC | 18640+i | `CONTROL_HOST`:14550 | QGroundControl |
+| Telemetry (`TELEM=1`) | 14740+i | 127.0.0.1:14700 | `mavlink_mqtt.py` |
+| uXRCE-DDS | — | 127.0.0.1:8888 | XRCE agent (telemetry) |
+
+PX4 caps MAVLink at 6 instances → the entrypoint stops the unused payload link (14280+i) for the telemetry link.
+Port ranges fit 10 drones.
 
 ## Containers
 
-### px4-sim
-- **Build time:** `make px4_sitl_default` and `gz fuel download` of **Baylands**
-  (see `baylands_setup_guide.md` §3). Starting a container therefore needs no compile and no download.
-- **Start (`entrypoint.sh`):**
-  1. kill stale `px4` / `gz sim` / QGC / Xvfb processes, remove `/tmp/px4_lock-*`, X locks (`/tmp/.X99-lock`) and QGC lock (guide issue A; locks survive `docker restart`)
-  2. if `PX4_GZ_WORLD=baylands` and the Fuel cache is empty → download it (timeout 15 min)
-  3. `Xvfb :99` → `fluxbox` → `x11vnc :5900` (Gazebo); with `QGC=1` also `Xvfb :100` → `x11vnc :5901` (QGC)
-  4. for `i` in `0..PX4_NUM_DRONES-1`: `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`.
-     Instance 0 starts the Gazebo server + GUI; the others join the same world.
-  5. per instance: add the MAVSDK + QGC links towards `CONTROL_HOST`
-  6. if any PX4 instance exits → stop everything → Docker restarts the container
-- Logs: `docker logs px4-sim` (prefixed `[droneN]`) and `/var/log/px4/px4-N.log` in the container
-- Volume `gz-fuel-cache` → `/root/.gz/fuel`
-- PX4 shell of drone 1: `docker exec -it px4-sim /px4/build/px4_sitl_default/bin/px4-listener --instance 1 vehicle_status` (any `px4-<module> --instance N ...` works)
+**px4-sim** — PX4 built and Baylands cached at image build. Start: kill stale processes / locks → Xvfb `:99` (Gazebo,
+VNC 5900) + `:100` (QGC, 5901) → `px4 -i i -d` per drone (instance 0 starts Gazebo) → wait for rcS → open the links →
+exit if any PX4 dies. Logs `docker logs px4-sim`, `/var/log/px4/px4-i.log`. Changing env needs no rebuild:
+`up -d --force-recreate px4-sim telemetry`.
 
-| Env | Default | Meaning |
+| Env | Default | |
 | :--- | :--- | :--- |
-| `CONTROL_HOST` | – | control computer IP / hostname (resolved once at start) |
-| `PX4_NUM_DRONES` | `1` | number of PX4 instances |
-| `PX4_GZ_WORLD` | `baylands` | Gazebo world (`default` for a light, flat world) |
-| `PX4_SIM_MODEL` / `PX4_SYS_AUTOSTART` | `gz_x500` / `4001` | vehicle (`gz_x500_mono_cam_down` / `4014` for a camera) |
-| `DRONE_SPACING` | `3` | metres between spawned drones |
-| `HEADLESS` | – | `1` = no Gazebo GUI |
-| `QGC` | `1` | `1` = QGroundControl runs next to Gazebo in noVNC, `0` = off |
-| `SCREEN_SIZE` | `1920x1080x24` | Xvfb screen seen in noVNC |
-| `VNC_LISTEN` | `0.0.0.0` | x11vnc bind (`127.0.0.1` on the VM) |
-| `GZ_FOLLOW` | `0` | Gazebo camera follows drone N (same place as QGC's map); empty = free camera |
-| `PX4_GZ_FOLLOW_OFFSET_X/Y/Z` | `-8` / `-8` / `5` | camera offset from that drone, m (east / north / up) |
-| `GZ_PARTITION` / `ROS_DOMAIN_ID` | `aquarius` / `0` | shared with `telemetry` (Gazebo transport / uXRCE-DDS) |
-| `PX4_VIDEO_HOST_IP` | `127.0.0.1` | camera models: RTP/H.264 target, udp `5600+i` |
-| `CAMERA_WIDTH` / `CAMERA_HEIGHT` / `CAMERA_RATE` | `640` / `480` / `10` | camera models' image size / Hz (empty = model default, 1280x960 @ 30 → RTF ~0.03 without GPU) |
+| `CONTROL_HOST` | – | control computer (resolved once at start) |
+| `PX4_NUM_DRONES` · `DRONE_SPACING` | 1 · 3 | drones, metres apart |
+| `PX4_GZ_WORLD` | baylands | `default` = flat and light |
+| `PX4_SIM_MODEL` / `PX4_SYS_AUTOSTART` | gz_x500 / 4001 | camera: `gz_x500_mono_cam_down` / 4014 |
+| `HEADLESS` · `QGC` · `SCREEN_SIZE` | – · 1 · 1920x1080x24 | GUI off · QGC screen · Xvfb size |
+| `GZ_FOLLOW` · `PX4_GZ_FOLLOW_OFFSET_X/Y/Z` | 0 · -8/-8/5 | Gazebo camera follows drone N |
+| `CAMERA_WIDTH/HEIGHT/RATE` | 640/480/10 | model default 1280x960@30 → RTF 0.03 without GPU |
+| `GZ_PARTITION` · `ROS_DOMAIN_ID` | aquarius · 0 | same in telemetry |
+| `PX4_VIDEO_HOST_IP` | 127.0.0.1 | RTP/H.264 udp 5600+i (untested) |
+| `TELEM` | 1 | 3rd MAVLink link for the dashboard |
 
-> Gazebo and QGC show the same place: the drone's GPS comes from the world's `<spherical_coordinates>`
-> (Baylands: 37.4122, -121.9989), so QGC's map = Gazebo's world. Don't set PX4's `PX4_HOME_LAT/LON/ALT`
-> with Baylands: it moves the GPS origin but not the 3D park, so QGC's satellite map and Gazebo would differ.
+Don't set `PX4_HOME_*` with Baylands — GPS comes from the world (37.4122, -121.9989), so QGC's map = Gazebo.
 
-Changing these needs no rebuild. Edit `.env`, then
-`docker compose -f <file> up -d --force-recreate px4-sim`.
+**telemetry** — shares px4-sim's network (`host` on the VM, `service:px4-sim` locally → after recreating px4-sim also
+`restart telemetry`). Runs the XRCE agent (`/fmu/out/*`), `ros_gz_bridge` (`/uav_i/gz/{imu,navsat,air_pressure,
+magnetometer}`, camera, `/clock`, lazy), `ground_truth.py` (`/uav_i/gz/ground_truth`), `web_video_server`,
+`mavlink_mqtt.py`, `aquarius_bridge` (Kafka) and optionally `ros2 bag` (`RECORD=1` → `data/bags/<date>`). Exits if one
+dies. ROS CLI: `docker exec telemetry with-ros ros2 topic list`. Topic details: [`telemetry_plan.md` §4](telemetry_plan.md).
 
-### novnc / novnc-qgc — two browser views
-- Image `dougw/novnc`: bridges VNC → WebSocket/HTTP. Two instances, one per screen:
-
-| Service | Screen | VNC | Local | VM (host network) |
-| :--- | :--- | :--- | :--- | :--- |
-| `novnc` | Gazebo `:99` | `5900` | <http://localhost:8080/vnc.html> | `http://<VM_IP>:8081/vnc.html` |
-| `novnc-qgc` | QGroundControl `:100` | `5901` | <http://localhost:8082/vnc.html> | `http://<VM_IP>:8082/vnc.html` |
-
-- Gazebo has no web viewer of its own. It renders into Xvfb, x11vnc streams that, and noVNC serves it to the browser.
-- The image always listens on 8081; on the VM (host network) `novnc-qgc` overrides its command to listen on 8082.
-- With `QGC=1` QGroundControl (extracted AppImage in `/opt/qgc`, run as user `qgc` because QGC
-  refuses root) opens maximized on its own screen `:100`. It connects by itself through PX4's default GCS link
-  (`18570+i` → `localhost:14550`), so every drone shows up — no QGC setup needed. Log:
-  `/var/log/px4/qgc.log`. If you close its window, restart it with
-  `docker compose -f <file> restart px4-sim`. The "not running latest stable firmware" popup is
-  normal for SITL (reports version 0.0.0).
-
-### telemetry
-Server-side telemetry topics + drone camera view. Full topic list, notes: [`telemetry_plan.md` §4](telemetry_plan.md).
-
-- Runs in px4-sim's network (`network_mode: host` on the VM, `service:px4-sim` locally): PX4's
-  uXRCE-DDS client sends to `127.0.0.1:8888`, Gazebo transport discovery needs the same host + `GZ_PARTITION`.
-- Starts: `MicroXRCEAgent` (PX4 uORB → ROS 2 `/fmu/out/*`, `/uav_i/fmu/out/*`), `ros_gz_bridge` (Gazebo
-  → `/uav_i/gz/{imu,navsat,air_pressure,magnetometer}`, `/clock`, camera
-  `/uav_i/camera/image_raw`), `ground_truth.py` (true pose `/uav_i/gz/ground_truth`), `web_video_server`,
-  `mavlink_mqtt.py` (MAVLink → MQTT for the [dashboard](#dashboard-grafana)), optional `ros2 bag record`.
-  Exits if one of them dies → Docker restarts it.
-- The drone camera needs a camera model: `PX4_SIM_MODEL=gz_x500_mono_cam_down` + `PX4_SYS_AUTOSTART=4014`
-  (down, mapping) / `gz_x500_mono_cam` + `4010` (forward) / `gz_x500_gimbal` + `4019`, then
-  `up -d --force-recreate px4-sim telemetry`.
-
-| View | Local | VM |
+| Env | Default | |
 | :--- | :--- | :--- |
-| Drone camera (MJPEG, every image topic listed) | <http://localhost:8083/> | `http://<VM_IP>:8083/` |
-| One camera | `…:8083/stream?topic=/uav_0/camera/image_raw` | |
-| Dashboard (plots, map, camera, events) | <http://localhost:3000> | `http://<VM_IP>:3000` |
-| ROS 2 CLI | `docker exec telemetry with-ros ros2 topic list` | same |
-| Recording (`RECORD=1`) | `docker/data/bags/<date>/` | `~/aquarius/data/bags/<date>/` |
+| `GZ_CAMERA` | from model | `<link>/<sensor>`, `none` = off |
+| `WEB_VIDEO_PORT` · `GT_RATE` | 8083 · 30 | empty = off |
+| `MQTT_URL` · `FLEET` | mosquitto · sim | empty = no MQTT |
+| `KAFKA_BOOTSTRAP` | kafka:19092 / 127.0.0.1:19092 | empty = no Kafka bridge |
+| `MISSION_ID` · `BRIDGE_IMAGE_FPS` | new UUID · 2 | pipeline |
+| `RECORD` · `RECORD_REGEX` | – · PX4 + gz topics | ros2 bag (mcap) |
 
-| Env | Default | Meaning |
-| :--- | :--- | :--- |
-| `PX4_NUM_DRONES` / `PX4_GZ_WORLD` / `PX4_SIM_MODEL` | as px4-sim | used to build the topic names |
-| `GZ_PARTITION` | `aquarius` | Gazebo transport partition — also set on px4-sim |
-| `ROS_DOMAIN_ID` | `0` | ROS 2 / uXRCE-DDS domain — also set on px4-sim |
-| `GZ_CAMERA` | from model | camera `<link>/<sensor>` (`camera_link/camera`), `none` = no camera |
-| `WEB_VIDEO_PORT` | `8083` | empty = off |
-| `MQTT_URL` | `mqtt://mosquitto:1883` (local) / `mqtt://127.0.0.1:1883` (VM) | MAVLink → MQTT bridge, empty = off |
-| `FLEET` | `sim` | first topic level / `fleet` column in TimescaleDB (`real` later) |
-| `GT_RATE` | `30` | Hz of `/uav_i/gz/ground_truth` (empty = off) |
-| `RECORD` / `RECORD_REGEX` | – / PX4 + gz topics | `1` = `ros2 bag record` (mcap); add `/uav_[0-9]+/camera/image_raw` for video (large) |
+**timescaledb** — PostgreSQL 17 + TimescaleDB 2.22 + PostGIS 3.6, DB / user `aquarius`, volume `tsdb-data`,
+`TSDB_MEMORY` (1 GB) for tuning, VM listens on 127.0.0.1 (`TSDB_PORT`). `TSDB_PASSWORD` / `GRAFANA_ADMIN_PASSWORD`
+apply to empty volumes only.
 
-px4-sim's camera models also stream RTP/H.264 to `PX4_VIDEO_HOST_IP:5600+i` (PX4 GstCameraSystem, default
-`127.0.0.1` = QGC in noVNC: Application Settings → Video → UDP h.264, port 5600) — not tested yet.
+**drone-control** — idles; `docker compose exec` runs scripts; `DRONE_ID` → `udpin://0.0.0.0:14540+i`, `MAVLINK_URL`
+overrides; `AUTO_RUN` runs once at start.
 
-> Local: when px4-sim is recreated or restarted, also `docker compose -f compose.local.yml restart telemetry`
-> (a container in `service:px4-sim` network mode does not re-join the new namespace by itself).
+## Performance test — `bench_sim.sh`
 
-### Dashboard (Grafana)
-Plan / reasons: [`communication_plan.md`](communication_plan.md) (phases M1 + M2 done).
+`./bench_sim.sh [native|docker|both]` (env `DRONES`, `DURATION`, `WORLD`, `HEADLESS`, `COMPOSE_FILE`): N idle drones,
+reports `boot_s`, `ready_s`, `rtf` (main number), `cpu_%`, `rss_mb` → `bench_results.csv`. Compare only on the Linux VM
+(Docker Desktop falls back to `docker stats`). Measured on this PC: native boot 17.7 s / RTF 1.006, Docker 40.3 s / 1.018.
 
-```
-PX4 drone i ── MAVLink 14740+i → 127.0.0.1:14700 ──► telemetry: mavlink_mqtt.py (pymavlink, one socket, sysid = i+1)
-                                                         │ MQTT aquarius/<fleet>/drone/<i>/<stream>  (JSON, booleans 0/1)
-                                                         ▼
-                                   mosquitto :1883 / ws :9001 ──► telegraf ──► timescaledb :5432 ──► grafana :3000
-```
+Load notes (6 vCPU / 7.7 GB WSL): 1 camera drone headless RTF ~0.9–1.0; GUI + QGC ~0.8; **2 camera drones +
+pipeline ≈ 0.34** (CPU rendering). Use `HEADLESS=1`, `QGC=0`, fewer camera drones or a lower `CAMERA_RATE`.
 
-- **3rd PX4 link** (px4-sim entrypoint, `TELEM=1`): PX4 allows 6 MAVLink instances — 4 from `px4-rc.mavlink`
-  + MAVSDK + QGC — so the entrypoint stops PX4's unused onboard-payload link (14280+i) first.
-- `mavlink_mqtt.py` asks PX4 for `GLOBAL_POSITION_INT` / `ATTITUDE` at 10 Hz, the rest at 1 Hz, and sends a
-  1 Hz GCS heartbeat (PX4 forwards `STATUSTEXT` only to GCS links). It sends **no** commands.
-- Streams: `online`, `status` (armed, mode, landed), `position` (lat, lon, alt_amsl, alt_rel, vn/ve/vd, speed,
-  climb, hdg), `attitude`, `battery`, `gps`, `health`, `mission` (seq, total), `event` (STATUSTEXT).
-  → **TimescaleDB** (PostgreSQL 17 + TimescaleDB 2.22, DB `aquarius`): Telegraf `outputs.postgresql` creates one
-  table per stream (`"position"`, `"status"`, ...) with columns `time` (timestamptz), `fleet`, `drone` (text) + one
-  column per JSON field (numbers `double precision`, strings `text`; new fields → new columns). Each new table is
-  made a **hypertable** (1-day chunks) with index `(fleet, drone, time DESC)` and a retention policy
-  (`TSDB_RETENTION`) by `aquarius_hypertable()` — defined in the `timescaledb_init` config (runs on an empty volume).
-- Dashboard **Aquarius — Fleet telemetry** (home page): link / armed / mode / battery / altitude / satellites
-  per drone, satellite map with flight path, drone camera (MJPEG from `:8083`), altitude / speed / climb,
-  flight-mode timeline, mission waypoint, battery %, voltage, GPS eph, sensors, events table, roll / pitch.
-  Variables: fleet, drones (multi), camera drone, **camera URL** — the browser loads the camera itself, so off
-  the VM open `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (`aquarius urls` prints it).
-  Colors: drone i = fixed categorical slot i; status green / yellow / red only for OK / warning / fault.
-- Edit in the UI, then Export → JSON into `grafana/dashboards/aquarius.json` and rebuild `aquarius-grafana`.
-  Panels are SQL (datasource `TimescaleDB`, uid `aquarius-tsdb`): numbers as format *Time series* with a text
-  column `drone` (`'drone ' || drone`) → becomes the series label (`displayName ${__field.labels.drone}`);
-  strings (flight mode, mission progress) as format *Table* + transformation *Partition by values* (`drone`, as labels).
-- Raw data: `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v`; SQL:
-  `docker exec -it timescaledb psql -U aquarius aquarius` (local also `psql -h localhost`, VM `ssh -L 5432:127.0.0.1:5432 <vm>`), e.g.
-  `SELECT time, drone, lat, lon, alt_rel FROM "position" ORDER BY time DESC LIMIT 5;`
-  (quote table names: `position` is an SQL keyword). Fits pandas / Python analysis directly (`psycopg`).
-- Mosquitto / Telegraf / TimescaleDB-init configs are inline in the compose files (`configs:` → Compose ≥ 2.23.1),
-  same text in both — keep them in sync. Secrets in `.env`: `GRAFANA_ADMIN_PASSWORD`, `TSDB_PASSWORD` (applied on
-  first start only — empty volumes), `TSDB_RETENTION` (30d, read when a table is created; change later with
-  `SELECT remove_retention_policy('"position"'); SELECT add_retention_policy('"position"', INTERVAL '90 days');`).
+## Troubleshooting
 
-| Env | Where | Default | Meaning |
-| :--- | :--- | :--- | :--- |
-| `TELEM` / `TELEM_HOST` | px4-sim | `1` / `127.0.0.1` | 3rd MAVLink link on/off, target of the link |
-| `MQTT_URL` / `FLEET` | telemetry | see above / `sim` | bridge target / topic prefix |
-| `GRAFANA_ADMIN_PASSWORD` | grafana | `admin` | change on the VM |
-| `TSDB_PASSWORD` | timescaledb, telegraf, grafana | `aquarius-admin` | DB user `aquarius`, change on the VM before the first start |
-| `TSDB_RETENTION` | telegraf | `30d` | keep data this long (`''` / `0` = forever) |
-| `TSDB_MEMORY` | timescaledb | `1GB` | memory timescaledb-tune sizes Postgres for |
-| `TSDB_PORT` | VM only | `5432` | if the VM already runs a Postgres on 5432 |
+| Symptom | Fix |
+| :--- | :--- |
+| Drone moves in QGC, not in Gazebo | camera follow: `GZ_FOLLOW=0`, wait ~20 s for "Gazebo camera follows" |
+| `restart` → no Gazebo screen / "QGC already running" | fixed in the entrypoint (stale X / QGC locks) — recreate if it persists |
+| Scripts hang, udp 14540 busy | leftover `mavsdk_server`: `docker exec drone-control pkill -f mavsdk_server` |
+| Git Bash mangles `/tmp/...` | `MSYS_NO_PATHCONV=1` |
+| No ROS topics after px4-sim recreate (local) | `docker compose -f compose.local.yml restart telemetry` |
+| Pipeline: no rows | `aquarius logs pipeline`: `waiting for Kafka` = profile not running; `px4 offset n/a` = PX4 not connected yet (~30 s after a telemetry restart); wrong topic names = `px4_msgs` ≠ PX4 (`PX4_REF`) |
+| `db-migrate` exited 1 | `docker logs db-migrate` names the failing file |
+| `KAFKA_PARTITIONS` change ignored | topics exist: `pipeline down`, `docker volume rm aquarius-<mode>_kafka-data`, `pipeline up` |
+| Kafka unreachable from another machine | `KAFKA_ADVERTISED_HOST=<this host's IP>` + recreate kafka |
+| Old DB volume | before 2026-11-08 the DB was `timescaledb-data` (no PostGIS): `docker volume rm aquarius-<mode>_timescaledb-data` |
 
-### drone-control
-- Ubuntu 24.04 + ROS 2 Jazzy + MAVSDK, with `Drone-Control/` copied in at build time
-- Idles (`sleep infinity`) as a control station; run scripts with `docker compose exec`
-- `AUTO_RUN` (optional): command run once when the container starts, before idling — e.g.
-  `AUTO_RUN=python3 mcpp_mission.py`. Output: `docker logs -f drone-control`.
-- `DRONE_ID=N` → `udpin://0.0.0.0:14540+N`; `MAVLINK_URL` overrides the address
+## Future plan
 
----
-
-## Future plan — many drones on the VM server
-
-### Phase 1 — now: N drones in one container
-`PX4_NUM_DRONES=N` in `.env`. All PX4 instances + one Gazebo server live in `px4-sim`.
-Port ranges are sized for **10 drones** (`14540-14549`, `14640-14649`, `18640-18649`).
-Widen them in the compose files and firewall for more.
-
-Rough VM sizing (software rendering, no GPU):
-
-| Drones | World | vCPU | RAM | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| 1–2 | baylands | 4 | 8 GB | GUI ok |
-| 3–5 | baylands | 8 | 16 GB | consider `HEADLESS=1` |
-| 5–10 | default | 8–16 | 16–32 GB | `HEADLESS=1`, watch real-time factor |
-
-Check the Gazebo real-time factor: `docker exec px4-sim gz topic -e -t /world/baylands/stats -n 1` (use your world name).
-If it stays well below 1.0, run fewer drones, switch to `PX4_GZ_WORLD=default`, or add CPU.
-
-### Phase 2 — swarm control from the control computer
-- One script for several drones: one MAVSDK `System()` per drone on `udpin://0.0.0.0:14540+i`,
-  run together with `asyncio.gather(...)` (e.g. `swarm_test.py`).
-- QGroundControl already sees every drone on `:14550`.
-- ROS 2 per drone: one `MicroXRCEAgent udp4 -p 8888` on the VM. Every PX4 instance publishes under
-  its own namespace (drone 0: `/fmu/...`, drone i: `/uav_i/fmu/...`). Use the same `ROS_DOMAIN_ID` on
-  both machines. Details: `telemetry_plan.md`.
-- Camera: ✅ `telemetry` service (`ros_gz_bridge` on the VM, browser view on 8083). `view_cam.py`
-  (`/uav_<DRONE_ID>/camera/image_raw`) on the control computer additionally needs DDS between the machines (T3).
-- CI: a GitHub Actions job that builds and pushes both images on every push to `main`, so the VM
-  only needs `pull`.
-
-### Communication plan
-
-MAVLink → MQTT → Telegraf / TimescaleDB / Grafana for live dashboards + history, Kafka only when needed, control and
-video kept off the broker: **[`communication_plan.md`](communication_plan.md)** (phases M1–M6).
-
-### Telemetry & camera plan
-
-All sensors / battery / state + the drone camera to the server: **[`telemetry_plan.md`](telemetry_plan.md)**
-(full list of telemetry available in Gazebo / PX4 / MAVLink / MAVSDK, steps T1–T5, camera C1–C4;
-§4 = the implemented `telemetry` service).
-
-### Phase 3 — scale out (one container per drone / several VMs)
-```
-VM server
-├── gz-server     Gazebo world only                       GZ_PARTITION=aquarius
-├── px4-0         px4 -i 0, PX4_GZ_STANDALONE=1, CONTROL_HOST=...
-├── px4-1         px4 -i 1, ...
-└── px4-N         (one service per drone, same aquarius-px4-sim image with ROLE env)
-```
-- Split `entrypoint.sh` into `ROLE=gz-server` and `ROLE=px4-instance`.
-- PX4 instances find Gazebo through Gazebo transport (`GZ_PARTITION`, plus `GZ_IP` for multi-host),
-  so they can later run on **several VMs** sharing one world.
-- Health check per drone (`px4-mavlink --instance i status`), so one drone can restart without
-  touching the others.
-- Move to Kubernetes / Nomad only if the drone or VM count keeps growing.
+1. Now: N drones in one px4-sim (VM sizing: 1–2 drones 4 vCPU / 8 GB; 3–5 → 8 / 16 GB, headless; 5–10 → flat world).
+2. Swarm control from the control computer (`asyncio.gather` over one MAVSDK `System` per drone); DDS across machines
+   with the discovery server in `Data-Pipeline/tools/dds/` (T3).
+3. Scale out: one container per drone (`ROLE=gz-server` / `px4-instance`, `GZ_PARTITION` + `GZ_IP` across VMs), health
+   check per drone, CI that builds + pushes the images.
+4. Communication phases M3–M6 (ground truth to MQTT, MQTT auth / TLS, real drones via `mavlink-router`):
+   [`communication_plan.md`](communication_plan.md). Telemetry / camera options: [`telemetry_plan.md`](telemetry_plan.md).

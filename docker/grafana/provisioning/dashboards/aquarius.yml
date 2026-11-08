@@ -3,6 +3,7 @@ providers:
   - name: aquarius
     folder: Aquarius
     type: file
-    allowUiUpdates: true      # edit in the UI, export to dashboards/aquarius.json to keep it
+    allowUiUpdates: true      # UI edits are lost on rebuild: export them into dashboards/*.json
     options:
       path: /etc/grafana/dashboards
+    # aquarius.json (Fleet, home page) + mission.json (Mission monitor, profile pipeline)

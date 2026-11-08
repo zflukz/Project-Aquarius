@@ -142,7 +142,7 @@ def main():
 
     rows = summarize(stats, a.hz, a.seconds)
     if not rows:
-        print("no data received - is anything producing? (check `docker compose ps` and the bridge log)")
+        print("no data received - is anything producing? (check `aquarius status` and `docker logs telemetry | grep kafka`)")
         return 1
     cols = list(rows[0])
     print("  ".join(f"{k:>{max(len(k), 6)}}" for k in cols))

@@ -216,6 +216,7 @@ C3 is done first (2026-10-17) because the `telemetry` container needed ROS 2 any
                                                   ground_truth.py ─► /uav_i/gz/ground_truth
                                                   web_video_server :8083   camera in the browser
                                                   mavlink_mqtt.py  udp 14700 → MQTT → Grafana :3000 (PX4 MAVLink, 3rd link)
+                                                  aquarius_bridge  PX4 + camera topics → Kafka (profile pipeline, uav<i>)
                                                   ros2 bag (RECORD=1)      data/bags/<date>  (mcap)
 ```
 

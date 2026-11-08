@@ -11,7 +11,8 @@ a separate computer, later real drones.
 
 | Path | What |
 | :--- | :--- |
-| `docker/` | **everything Docker / simulator** — see `docker/README.md`; telemetry + camera plan: `docker/telemetry_plan.md`; MAVLink → MQTT → Grafana (+ Kafka later) plan: `docker/communication_plan.md` |
+| `docker/` | **everything Docker / simulator / infra** — see `docker/README.md` (incl. data pipeline); telemetry + camera plan: `docker/telemetry_plan.md`; MAVLink → MQTT → Grafana plan: `docker/communication_plan.md`; DB migrations `docker/db/`, `ingestion/`, `imagestream/`; **merge status / resume: `docker/merge_status.md`** |
+| `Data-Pipeline/` | pipeline code (was `data/`): `ros2_ws/src/aquarius_bridge` (ROS 2 → Kafka, built into the telemetry image), `schemas/` (A2 JSON schemas), `tools/` (checks, fake drones, DDS discovery server, native SITL), `results/` |
 | `Drone-Control/` | `flight_test.py`, `teleop_drone.py`, `mcpp_mission.py`, `mission_cli.py` (MAVSDK), `view_cam.py` (ROS 2 camera) |
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
 | `AQUARIUS_CLI.md` | user guide for the `aquarius` command (`scripts/aquarius`): every command, option, example, troubleshooting |
@@ -32,12 +33,12 @@ a separate computer, later real drones.
 
 ## Architecture (Docker)
 
-Three modes, same four images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-drone-control`):
+Three modes, same images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-drone-control`; profile `pipeline` adds `…/aquarius-ingestion`, `…/aquarius-imagestream`):
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + timescaledb (127.0.0.1:5432) + telegraf + grafana (3000) + drone-control on one bridge network; also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / timescaledb / telegraf / grafana (3000), `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + timescaledb (TimescaleDB + PostGIS, 127.0.0.1:5432) + telegraf + grafana (3000) + drone-control on one bridge network; profile `pipeline`: kafka (9092) + kafka-init + db-migrate + ingestion + imagestream (8090) + kafka-ui (8084); also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / timescaledb / telegraf / grafana (3000) + profile `pipeline` (same services as local), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -339,6 +340,38 @@ streams for 2 drones (mosquitto_pub, 2 Hz) → 9 hypertables with index + 30-day
 MISSION / battery / alt / sats, map track, series, mode timeline, events, roll / pitch, mission `4 / 14`); after
 stopping the publisher Link → OFFLINE (0) after 5 s. Not tested: real PX4 flight into TimescaleDB, `compose.server.yml` on the VM, image not pushed.
 
+## Change log — data pipeline merged into docker/, real Gazebo data (2026-11-08)
+
+User asked to read all md files in `docker/` + `data/`, merge the infra into `docker/` and decide each config choice
+(pros / cons given, user picked). Mid-task: the pipeline must take **real data from the Gazebo drones**, not fake data.
+Full status, decisions, file list, verification and next steps: **`docker/merge_status.md`**. Nothing committed.
+
+- Layout: infra → `docker/` (`db/migrations`, `db/tests`, `ingestion/`, `imagestream/`, `grafana/build_dashboards.py`,
+  `grafana/dashboards/mission.json`, Kafka topics inline in compose), code → **`Data-Pipeline/`**. `data/` removed;
+  its README merged into `docker/README.md` (rewritten: 312 lines, was 551).
+- **One DB:** `timescale/timescaledb-ha:pg17.6-ts2.22.1` (TimescaleDB 2.22 + PostGIS 3.6), volume **`tsdb-data`**
+  (was `timescaledb-data`, image without PostGIS). Telegraf tables + migration tables side by side. Image 6.8 GB →
+  smaller own image is an open user decision.
+- **One Grafana** (`aquarius-grafana` 12.2): Fleet (home) + Mission monitor, datasource uid `aquarius-tsdb`,
+  `GF_PANELS_DISABLE_SANITIZE_HTML=true`.
+- **Profile `pipeline`** in both compose files: kafka (KRaft, heap 512 MB), kafka-init, db-migrate, ingestion,
+  imagestream :8090, kafka-ui :8084. Two ways: on demand `aquarius pipeline up/down`, always `COMPOSE_PROFILES=pipeline`
+  (`aquarius pipeline on/off`, `init --pipeline`).
+- **`aquarius_bridge` inside `telemetry`** (build context `pipeline` = `../Data-Pipeline`): drones `uav0..uavN-1`,
+  PX4 `/fmu/out` (drone 0) / `/uav_i/fmu/out`, camera `/uav_i/camera/image_raw` → JPEG, sim time. Supervisor waits for
+  Kafka + topics, stops the bridge (SIGTERM to the node itself — `ros2 run` left an orphan node, subshell jobs ignore
+  SIGINT) when Kafka goes away, then waits again.
+- **Gotcha found:** PX4 SITL **segfaulted** after its uXRCE session reconnected when `telemetry` was restarted alone
+  (intermittent) → the CLI never restarts telemetry for the pipeline.
+- Verified: compose config, images built, 2 Gazebo drones → Kafka → TimescaleDB (Baylands coords, 0 rejects), camera
+  frames in imagestream, real mission → RTL recorded, `phase_c_check.sh` all PASS (18 dashboard queries), Grafana
+  Mission query on live data, unit tests 45/46 (1 = missing pyyaml in the test container). Resumed: `aquarius pipeline
+  down` → `up` with 2 drones: bridge 1 → 0 → 1 process, px4-sim / telemetry not restarted, rows again for uav0 + uav1.
+- Docs: `WORKFLOW.md` (1b push list, 4a pipeline, file map), `AQUARIUS_CLI.md` (`pipeline`, `--pipeline`,
+  `logs pipeline`, troubleshooting), notes in `communication_plan.md` §6 and `telemetry_plan.md` §4.
+- Open: DB image size decision (6.8 GB ha image vs own small TimescaleDB + PostGIS image), push of the two new images,
+  VM test of `compose.server.yml` with the profile, 2 old negative-`ts_us` rejects (bridge clock edge case).
+
 ## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
 
 `./bench_sim.sh [native|docker|both]`: N PX4 instances idle in one world, headless, no QGC; measures
@@ -514,5 +547,6 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 - GHCR packages are private by default → make public or `docker login` on the VM.
 - Raw-GitHub `curl` of `compose.server.yml` works only after these files are on `main` and the repo is public.
 - `git status` shows `Visualization/Python/*` deleted — not done by Claude; confirm before committing.
+- Data pipeline merge (2026-11-08): local work done; open points in `docker/merge_status.md` → "Next".
 - Future plan (multi-drone phases, swarm script, MicroXRCE agent, per-drone containers, CI build/push):
   see `docker/README.md` → "Future plan".

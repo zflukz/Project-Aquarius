@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 from aquarius_ingest.rows import (DRONE_UPSERT_SQL, MISSION_UPSERT_SQL, SQL, Rejected, Seen,  # noqa: E402
                                   decode, load_validators, to_row, ts_from_us)
 
-V = load_validators(os.path.join(HERE, "..", "..", "schemas"))
+V = load_validators(os.path.join(HERE, "..", "..", "..", "Data-Pipeline", "schemas"))
 MISSION = str(uuid.uuid4())
 
 

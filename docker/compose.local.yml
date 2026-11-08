@@ -10,6 +10,9 @@
 # Dashboard: Grafana http://localhost:3000 (admin / GRAFANA_ADMIN_PASSWORD), camera http://localhost:8083/
 #   PX4 MAVLink -> telemetry (mavlink_mqtt.py) -> mosquitto -> telegraf -> timescaledb -> grafana
 #   (docker/communication_plan.md). Raw MQTT: docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v
+# Data pipeline (profile `pipeline`, off by default): Gazebo drones -> telemetry (aquarius_bridge) -> Kafka
+#   -> ingestion -> TimescaleDB -> Grafana "Mission monitor". On demand: aquarius pipeline up;
+#   always: COMPOSE_PROFILES=pipeline in .env. Camera :8090, Kafka UI :8084, Kafka :9092 (README "Data pipeline").
 name: aquarius-local
 
 services:
@@ -77,6 +80,8 @@ services:
   telemetry:
     build:
       context: ./telemetry
+      additional_contexts:
+        pipeline: ../Data-Pipeline        # aquarius_bridge (ROS 2 -> Kafka) source
       args:
         # px4_msgs must match px4-sim's PX4: PX4_REF=$(docker exec px4-sim git -C /px4 rev-parse HEAD)
         PX4_REF: ${PX4_REF:-main}
@@ -98,6 +103,10 @@ services:
       - GT_RATE=${GT_RATE-30}                # ground truth Hz (/uav_i/gz/ground_truth), empty = off
       - RECORD=${RECORD:-}                  # 1 = ros2 bag (mcap) -> data/bags/<date>
       - RECORD_REGEX=${RECORD_REGEX:-.*/fmu/out/.*|/uav_[0-9]+/gz/.*}
+      # aquarius_bridge: the drones' ROS 2 topics -> Kafka, starts once Kafka answers (profile pipeline); empty = off
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP-kafka:19092}
+      - MISSION_ID=${MISSION_ID:-}             # empty = new mission UUID at every telemetry start
+      - BRIDGE_IMAGE_FPS=${BRIDGE_IMAGE_FPS:-2} # camera frames / s per drone into Kafka
     volumes:
       - ./data:/data                        # bags: docker/data/bags
     depends_on:
@@ -122,7 +131,7 @@ services:
     restart: unless-stopped
 
   timescaledb:
-    image: timescale/timescaledb:2.22.1-pg17
+    image: timescale/timescaledb-ha:pg17.6-ts2.22.1   # TimescaleDB + PostGIS (pipeline: mission / grid tables)
     container_name: timescaledb
     networks:
       - drone-net
@@ -140,7 +149,7 @@ services:
         target: /docker-entrypoint-initdb.d/zz-aquarius.sql
         mode: 0444
     volumes:
-      - timescaledb-data:/var/lib/postgresql/data
+      - tsdb-data:/home/postgres/pgdata
     healthcheck:                            # TCP: the init server (first start) only listens on the socket
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U aquarius -d aquarius"]
       interval: 5s
@@ -187,6 +196,136 @@ services:
       - timescaledb
     restart: unless-stopped
 
+  # --- data pipeline (profile `pipeline`): Gazebo drones -> telemetry (aquarius_bridge, ROS 2) -> Kafka
+  #     -> ingestion -> TimescaleDB (docker/db/migrations) -> Grafana "Mission monitor". README "Data pipeline".
+  #     on demand: aquarius pipeline up / down      always: COMPOSE_PROFILES=pipeline in .env
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kafka
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    ports:
+      - "9092:9092"                         # bridge / tools outside Docker: localhost:9092
+    environment:
+      KAFKA_NODE_ID: 1                                  # KRaft: one node = broker + controller
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL = other containers (kafka:19092), EXTERNAL = the host / other machines (KAFKA_ADVERTISED_HOST:9092)
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://${KAFKA_ADVERTISED_HOST:-localhost}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1         # single broker: every replication factor is 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"          # topics only from kafka-init (A3)
+      KAFKA_MESSAGE_MAX_BYTES: 2097152                  # 2 MB: image-frames
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 2097152
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx512m -Xms512m}
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  kafka-init:                               # creates the 5 topics (A3), then exits 0
+    image: apache/kafka:3.8.0
+    container_name: kafka-init
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    environment:
+      BOOTSTRAP: kafka:19092
+      PARTITIONS: ${KAFKA_PARTITIONS:-10}            # = max drones; set before the first start
+    configs:
+      - source: kafka_topics
+        target: /create-topics.sh
+        mode: 0555
+    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  db-migrate:                               # applies docker/db/migrations (baked into the image), then exits 0
+    # status: docker compose -f <file> run --rm db-migrate python -m aquarius_ingest.migrate --status
+    build:
+      context: ..                           # repo root: schemas in Data-Pipeline/, migrations in docker/db/
+      dockerfile: docker/ingestion/Dockerfile
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-ingestion:${TAG:-latest}
+    container_name: db-migrate
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    environment:
+      PG_DSN: postgresql://aquarius:${TSDB_PASSWORD:-aquarius-admin}@timescaledb:5432/aquarius
+    command: ["python", "-m", "aquarius_ingest.migrate"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+
+  ingestion:                                # Kafka -> schema check -> TimescaleDB (bad messages -> ingest_rejects)
+    build:
+      context: ..                           # repo root: schemas in Data-Pipeline/, migrations in docker/db/
+      dockerfile: docker/ingestion/Dockerfile
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-ingestion:${TAG:-latest}
+    container_name: ingestion
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      PG_DSN: postgresql://aquarius:${TSDB_PASSWORD:-aquarius-admin}@timescaledb:5432/aquarius
+      BATCH_MAX: 500
+      BATCH_MAX_WAIT_S: 1.0
+      MERGE_RADIUS_M: ${MERGE_RADIUS_M:-3.0}          # C5: detections closer than this = same person
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      db-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  imagestream:                              # MJPEG of every drone from Kafka image-frames (Mission dashboard)
+    build:
+      context: ./imagestream
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-imagestream:${TAG:-latest}
+    container_name: imagestream
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    ports:
+      - "${IMAGESTREAM_PORT:-8090}:8090"     # camera from Kafka: http://localhost:8090/
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    profiles: [pipeline]
+    networks:
+      - drone-net
+    ports:
+      - "${KAFKA_UI_PORT:-8084}:8080"         # Kafka UI: http://localhost:8084
+    environment:
+      KAFKA_CLUSTERS_0_NAME: aquarius
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   drone-control:
     build:
       context: ..
@@ -217,7 +356,8 @@ networks:
 
 volumes:
   gz-fuel-cache:
-  timescaledb-data:                         # flight history (TSDB_RETENTION)
+  tsdb-data:                                # TimescaleDB: flight history (TSDB_RETENTION) + pipeline tables
+  kafka-data:                               # profile pipeline
   grafana-data:
 
 # Same text in compose.server.yml — keep both in sync. $$ = literal $ (Telegraf reads the env itself).
@@ -261,8 +401,9 @@ configs:
         ]
   timescaledb_init:
     content: |
-      -- runs once on an empty timescaledb-data volume
+      -- runs once on an empty tsdb-data volume (pipeline tables: docker/db/migrations via db-migrate)
       CREATE EXTENSION IF NOT EXISTS timescaledb;
+      CREATE EXTENSION IF NOT EXISTS postgis;
       -- Telegraf calls this right after creating a stream's table (position, status, battery, ...)
       CREATE OR REPLACE FUNCTION aquarius_hypertable(tbl regclass, retention text) RETURNS void
       LANGUAGE plpgsql AS $$body$$
@@ -274,3 +415,37 @@ configs:
         END IF;
       END
       $$body$$;
+  kafka_topics:
+    content: |
+      #!/usr/bin/env bash
+      # Creates every Kafka topic with the settings agreed in Phase A (A3).
+      # Safe to run again: existing topics are left as they are.
+      set -euo pipefail
+
+      BOOTSTRAP="$${BOOTSTRAP:-localhost:9092}"
+      PARTITIONS="$${PARTITIONS:-10}"   # = max drones (10)
+      KT=/opt/kafka/bin/kafka-topics.sh
+
+      DAY_MS=86400000
+
+      create() {
+        local topic="$$1" parts="$$2"; shift 2
+        local configs=()
+        for c in "$$@"; do configs+=(--config "$$c"); done
+        "$$KT" --bootstrap-server "$$BOOTSTRAP" --create --if-not-exists \
+              --topic "$$topic" --partitions "$$parts" --replication-factor 1 "$${configs[@]}"
+      }
+
+      create telemetry         "$$PARTITIONS" "retention.ms=$$((7 * DAY_MS))"
+      # 10 drones x 2 fps x ~165 KB = ~3.3 MB/s. retention.bytes caps each partition at
+      # 2 GB (20 GB for the topic) so a long run can never fill the ground-station disk.
+      create image-frames      "$$PARTITIONS" "retention.ms=$$DAY_MS" "retention.bytes=2147483648" "max.message.bytes=2097152"
+      create detections        "$$PARTITIONS" "retention.ms=$$((7 * DAY_MS))"
+      create survivors         "$$PARTITIONS" "retention.ms=$$((30 * DAY_MS))"
+      # One partition: keeps the order of events across all drones in a mission (A3)
+      create replanning-events 1             "retention.ms=$$((30 * DAY_MS))"
+
+      echo "Topics now on the broker:"
+      "$$KT" --bootstrap-server "$$BOOTSTRAP" --describe \
+        --topic 'telemetry|image-frames|detections|survivors|replanning-events' \
+        | grep -E '^Topic:' || true

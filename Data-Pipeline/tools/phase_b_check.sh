@@ -7,21 +7,22 @@
 # Prints PASS/FAIL for: services, topics, data per drone in Kafka, images,
 # time sync (A4), rows in the database, duplicates and rejected messages.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.."                       # Data-Pipeline/
+. tools/stack.sh
 SECS="${1:-30}"
 pass=0; fail=0
 ok()  { echo "  PASS  $*"; pass=$((pass+1)); }
 bad() { echo "  FAIL  $*"; fail=$((fail+1)); }
-psql_q() { docker exec aquarius-db psql -U aquarius -d aquarius -tAc "$1" 2>/dev/null; }
+psql_q() { psql_in -d "$DB_NAME" -tAc "$1" 2>/dev/null; }
 
 echo "== 1. Docker services (B1)"
-for s in kafka db grafana ingestion kafka-ui; do
-  st=$(docker compose ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s="$s" '$1==s {print $2}')
+for s in kafka timescaledb grafana ingestion telemetry kafka-ui; do
+  st=$(dc ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s="$s" '$1==s {print $2}')
   [[ "$st" == "running" ]] && ok "$s running" || bad "$s is '${st:-missing}'"
 done
 
 echo "== 2. Kafka topics (A3)"
-desc=$(docker exec aquarius-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --describe 2>/dev/null | grep -E '^Topic:')
+desc=$(docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server $(kafka_internal) --describe 2>/dev/null | grep -E '^Topic:')
 for t in telemetry image-frames detections survivors replanning-events; do
   n=$(echo "$desc" | awk -v t="$t" '$2==t {for(i=1;i<=NF;i++) if($i=="PartitionCount:") print $(i+1)}')
   want=10; [[ "$t" == "replanning-events" ]] && want=1
@@ -45,7 +46,7 @@ PY
   python3 -c "import sys;sys.exit(0 if 0<$maxkb<2048 else 1)" && ok "largest JPEG ${maxkb} KB (< 2048 KB limit, A3)" \
     || bad "no images or JPEG too large (max ${maxkb} KB)"
 else
-  bad "no data from Kafka (is the bridge running?)"
+  bad "no data from Kafka (is the bridge running? docker logs telemetry | grep kafka)"
 fi
 rm -f "$tmp"
 

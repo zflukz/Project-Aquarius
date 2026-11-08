@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Generate the provisioned Grafana dashboards (Phase D) from readable Python.
 
-    python3 grafana/build_dashboards.py      # rewrites grafana/provisioning/dashboards/aquarius/*.json
+    python3 docker/grafana/build_dashboards.py      # rewrites docker/grafana/dashboards/mission.json
 
-Edit the panels here, not in the JSON: the JSON is overwritten. Grafana reloads
-the files within 30 s (no restart). Changes made in the Grafana UI are kept
-until the file changes; to keep one, copy it back here.
+Edit the panels here, not in the JSON: the JSON is overwritten. The JSON is baked
+into the aquarius-grafana image -> rebuild it (docker compose -f compose.local.yml
+up -d --build grafana). Datasource = the shared TimescaleDB (uid aquarius-tsdb).
 
-The SQL behind the panels is in db/migrations/0007_d_dashboard_helpers.sql.
+The SQL behind the panels is in docker/db/migrations/0007_d_dashboard_helpers.sql.
 """
 from __future__ import annotations
 
 import json
 import os
 
-DS = {"type": "grafana-postgresql-datasource", "uid": "aquarius-db"}
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "provisioning", "dashboards", "aquarius")
+DS = {"type": "grafana-postgresql-datasource", "uid": "aquarius-tsdb"}
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboards")
 M = "'$mission'"
 
 

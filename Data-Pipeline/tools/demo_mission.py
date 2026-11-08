@@ -4,7 +4,7 @@
 Step 1 - put the mission, its search area + grid, the planned paths (mCPP) and
 the ground truth people into the database:
 
-    python3 tools/demo_mission.py | docker exec -i aquarius-db psql -U aquarius -d aquarius -q
+    python3 tools/demo_mission.py | docker exec -i timescaledb psql -U aquarius -d aquarius -q
 
 Step 2 - fly it: fake drones send telemetry, images, detections and survivors
 through Kafka -> ingestion -> database, exactly like the real pipeline:

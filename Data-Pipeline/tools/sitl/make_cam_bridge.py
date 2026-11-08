@@ -56,7 +56,7 @@ def bridge_yaml(cams, clock):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default=os.path.expanduser("~/aquarius-data/results/cam_bridge_sitl.yaml"))
+    ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cam_bridge_sitl.yaml"))
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 

@@ -2,7 +2,7 @@
 """Print every SQL query of the provisioned Grafana dashboards, with Grafana's macros
 replaced, so they can be run with psql (used by tools/phase_c_check.sh).
 
-    python3 tools/dashboard_sql.py <mission_id> | docker exec -i aquarius-db psql -U aquarius -d aquarius
+    python3 tools/dashboard_sql.py <mission_id> | docker exec -i timescaledb psql -U aquarius -d aquarius
 """
 import glob
 import json
@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def queries(mission, swath="0", minutes=60):
-    for path in sorted(glob.glob(os.path.join(HERE, "..", "grafana", "provisioning", "dashboards", "*", "*.json"))):
+    for path in sorted(glob.glob(os.path.join(HERE, "..", "..", "docker", "grafana", "dashboards", "mission.json"))):
         d = json.load(open(path, encoding="utf-8"))
         for v in d.get("templating", {}).get("list", []):
             if v.get("type") == "query":

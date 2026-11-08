@@ -33,7 +33,7 @@
         "type": "query",
         "datasource": {
           "type": "grafana-postgresql-datasource",
-          "uid": "aquarius-db"
+          "uid": "aquarius-tsdb"
         },
         "query": "SELECT mission_id::text AS __value, coalesce(name, left(mission_id::text, 8)) || ' · ' || coalesce(to_char(last_ts AT TIME ZONE 'Asia/Bangkok', 'DD Mon HH24:MI'), 'no data') AS __text FROM missions ORDER BY last_ts DESC NULLS LAST LIMIT 50",
         "refresh": 2,
@@ -99,7 +99,7 @@
       "description": "พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 0,
@@ -112,7 +112,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -169,7 +169,7 @@
       "description": "จำนวนหมุด (คน) หลังรวมการตรวจพบที่ห่างกันไม่เกิน MERGE_RADIUS_M (C5)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 5,
@@ -182,7 +182,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -235,7 +235,7 @@
       "description": "survivors ทั้งหมดก่อนรวม (หลายเฟรม / หลายลำต่อคน)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 10,
@@ -248,7 +248,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -297,7 +297,7 @@
       "description": "โดรนที่มี telemetry เข้าฐานข้อมูลภายใน 10 วินาทีล่าสุด",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 14,
@@ -310,7 +310,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -363,7 +363,7 @@
       "description": "message ที่ไม่ผ่าน schema ดูสาเหตุในตาราง ingest_rejects",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 19,
@@ -376,7 +376,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -442,7 +442,7 @@
       "description": "กริดเปลี่ยนเป็นสีเขียวเมื่อแนวบินจริงผ่าน (D2) · จุดเทา = แนวบินตามแผน mCPP · สามเหลี่ยมแดง = หมุดผู้ประสบภัย ตัวเลข = จำนวนครั้งที่ตรวจพบ · วงกลมฟ้า = ตำแหน่งจริง (demo/F3)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 0,
@@ -455,7 +455,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -466,7 +466,7 @@
           "refId": "B",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -477,7 +477,7 @@
           "refId": "C",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -488,7 +488,7 @@
           "refId": "D",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -499,7 +499,7 @@
           "refId": "E",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -510,7 +510,7 @@
           "refId": "F",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -938,7 +938,7 @@
       "description": "ค่าล่าสุดของแต่ละลำ (D1) · ล่าสุด (s) = วินาทีตั้งแต่ข้อมูลเข้าฐานข้อมูล เกิน 5 = สัญญาณหาย",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 14,
@@ -951,7 +951,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -1057,7 +1057,7 @@
       "description": "D1",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 14,
@@ -1070,7 +1070,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -1115,7 +1115,7 @@
       "description": "D1",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 14,
@@ -1128,7 +1128,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -1171,7 +1171,7 @@
       "description": "เปลี่ยนสถานะ: UPDATE persons SET status = 'confirmed' WHERE person_id = ... (หน้าจอยืนยันอยู่ใน Phase E)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 0,
@@ -1184,7 +1184,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "table",
@@ -1252,7 +1252,7 @@
       "description": "received_at − ts ของ telemetry ทุก 10 วินาที · เชื่อได้เมื่อนาฬิกาตรงกัน (โดรนจริง + chrony หรือ Gazebo ที่ RTF ≈ 1)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 0,
@@ -1265,7 +1265,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -1308,7 +1308,7 @@
       "description": "ควรเป็น ~10 Hz ต่อลำ (A2) · ต่ำกว่านั้น = ข้อมูลหายระหว่างทาง (D3 loss rate)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
-        "uid": "aquarius-db"
+        "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 12,
@@ -1321,7 +1321,7 @@
           "refId": "A",
           "datasource": {
             "type": "grafana-postgresql-datasource",
-            "uid": "aquarius-db"
+            "uid": "aquarius-tsdb"
           },
           "editorMode": "code",
           "format": "time_series",

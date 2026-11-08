@@ -35,13 +35,14 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `aquarius init [local\|server\|control]` | start the containers for that machine and wait until PX4 is ready |
 | `aquarius drones [N]` | show / change the number of simulated drones (1–10), restarts px4-sim + telemetry |
 | `aquarius update [local\|server\|control]` | newest compose files + images, restart what changed (VM / control: pull only, local: rebuild) |
+| `aquarius pipeline [up\|down\|on\|off]` | data pipeline: Gazebo drones → Kafka → TimescaleDB → Grafana *Mission monitor* (no argument = status) |
 | `aquarius start mission LAT,LON [LAT,LON ...]` | fly to the points in order, then return home and land |
 | `aquarius start coverage [LAT,LON]` | MCPP coverage flight (lawnmower path) over an area centred on the point |
 | `aquarius status` | containers, then armed / flight mode / battery / position / GPS of a drone |
 | `aquarius rtl` (= `aquarius stop`) | return to launch now |
 | `aquarius land` | land where it is now |
-| `aquarius logs [mission\|coverage\|px4\|telemetry]` | follow a log (default `mission`) |
-| `aquarius urls` | links to Gazebo, QGroundControl, camera and the Grafana dashboard |
+| `aquarius logs [mission\|coverage\|px4\|telemetry\|pipeline]` | follow a log (default `mission`; `pipeline` = bridge + ingestion) |
+| `aquarius urls` | links to Gazebo, QGroundControl, camera, Grafana (+ Mission dashboard and Kafka UI when the pipeline runs) |
 | `aquarius down` | stop all containers |
 | `aquarius install` | put the command on your PATH |
 
@@ -62,6 +63,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `--headless` | init | – | no Gazebo GUI (saves CPU) |
 | `--no-files` | update | – | only pull / rebuild images, don't `git pull` / download the compose files |
 | `--control-host IP` | init server | – | IP of the control computer (required on the VM) |
+| `--pipeline` | init local / server | – | data pipeline always on (`COMPOSE_PROFILES=pipeline` in `.env`) |
 | `--build` | init local | – | rebuild the images before starting |
 
 The `init` options are **saved in `docker/.env`**, so later restarts keep them. Edit or remove the lines there to undo
@@ -135,6 +137,27 @@ aquarius update server   # explicit
 
 `.env` is never overwritten; settings that are new in `.env.example` are listed so you can copy them.
 The VM only gets new images after they were **pushed** from your computer (`docker/README.md` ②).
+
+### Data pipeline — `pipeline`
+
+Sends the **Gazebo drones' own data** (PX4 telemetry 10 Hz + camera JPEGs) through Kafka into TimescaleDB for the
+Grafana dashboard *Aquarius — Mission monitor* (missions, search grid, coverage, detections, survivor pins, camera
+of every drone). Off by default: Kafka needs ~0.5–1 GB RAM. Runs where the sim runs (local or VM).
+
+```bash
+aquarius pipeline            # status: COMPOSE_PROFILES + pipeline containers
+aquarius pipeline up         # start now (A: on demand) — the sim keeps running
+aquarius pipeline down       # stop now (Kafka data + tables are kept)
+aquarius pipeline on         # B: always — saves COMPOSE_PROFILES=pipeline in .env, then starts it
+aquarius pipeline off        # clear it in .env, then stop it
+aquarius logs pipeline       # bridge "[stats] image-frames=… telemetry=…" + ingestion counts
+```
+
+`up` / `down` touch only the pipeline containers (kafka, kafka-init, db-migrate, ingestion, imagestream, kafka-ui).
+The bridge inside `telemetry` notices Kafka coming / going by itself (drones `uav0`, `uav1`, …), so the sim and
+telemetry are never restarted for it. A new mission id is used each time telemetry starts (`MISSION_ID` in `.env`
+keeps one). Links (`aquarius urls`): Mission `http://<host>:3000/d/aquarius-mission?var-stream_url=http://<host>:8090`,
+Kafka UI `http://<host>:8084`. Details, tables and test tools: `docker/README.md` → "Data pipeline".
 
 ---
 
@@ -256,6 +279,8 @@ Exit codes: `0` = done; `1` = bad input, refused waypoint, mission did not finis
 | `server mode needs the control computer IP` | `aquarius init server --control-host <IP>` |
 | changed `Drone-Control/*.py` but nothing changed | Docker uses the image: `cd docker && docker compose -f compose.local.yml up -d --build drone-control` |
 | sim slow (RTF < 1) with `--camera` | keep the default camera size (640x480 @ 10 Hz); see `docker/telemetry_plan.md` |
+| `logs pipeline` keeps saying `waiting for Kafka` | pipeline not running: `aquarius pipeline up` |
+| pipeline `px4 offset n/a`, no telemetry rows | PX4 not connected to the XRCE agent yet (~30 s after telemetry starts); locally after px4-sim restarted by itself also `docker compose -f compose.local.yml restart telemetry` |
 
 **Safety (real drones later):** the same commands will work with `MAVLINK_URL`, but always check the points in
 QGroundControl first. Keep `--max-dist` small, and set geofence / RTL / failsafe parameters in PX4.

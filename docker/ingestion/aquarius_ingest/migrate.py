@@ -95,7 +95,7 @@ def connect(dsn: str, tries: int = 30):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dsn", default=os.environ.get("PG_DSN", "postgresql://aquarius:aquarius@localhost:5433/aquarius"))
+    ap.add_argument("--dsn", default=os.environ.get("PG_DSN", "postgresql://aquarius:aquarius-admin@localhost:5432/aquarius"))
     ap.add_argument("--dir", default=None, help="migrations directory (default: db/migrations)")
     ap.add_argument("--status", action="store_true", help="only print what is applied / pending")
     a = ap.parse_args(argv)

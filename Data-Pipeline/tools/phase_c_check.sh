@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Database done-checks (Phase C: C1-C5, Phase D: dashboard helpers) in one command. Needs `docker compose up -d` first.
+# Database done-checks (Phase C: C1-C5, Phase D: dashboard helpers) in one command. Needs the stack with the pipeline profile (aquarius pipeline up).
 #
 #   tools/phase_c_check.sh
 #
@@ -9,20 +9,21 @@
 #    checks grid, UTM, coverage (19 % by hand), index use (EXPLAIN) and the
 #    survivor merge. The throwaway database is dropped at the end; real data is not touched.
 set -uo pipefail
-cd "$(dirname "$0")/.."
-[[ -f .env ]] && set -a && . ./.env && set +a
-U="${POSTGRES_USER:-aquarius}"; P="${POSTGRES_PASSWORD:-aquarius}"; DB="${POSTGRES_DB:-aquarius}"
+cd "$(dirname "$0")/.."                       # Data-Pipeline/
+. tools/stack.sh
+U="$DB_USER"; P="$DB_PASS"; DB="$DB_NAME"
+DB_DIR="$DOCKER_DIR/db"
 TEST_DB=aquarius_ctest
-psql_db() { local d="$1"; shift; docker exec -i aquarius-db psql -U "$U" -d "$d" -v ON_ERROR_STOP=1 -X "$@"; }
+psql_db() { local d="$1"; shift; psql_in -d "$d" -v ON_ERROR_STOP=1 -X "$@"; }
 fail() { echo "FAIL  $*"; psql_db "$DB" -qc "DROP DATABASE IF EXISTS $TEST_DB" >/dev/null 2>&1; exit 1; }
 
-docker compose ps --format '{{.Service}} {{.State}}' | grep -q '^db running' || fail "db is not running (docker compose up -d)"
+dc ps --format '{{.Service}} {{.State}}' | grep -q '^timescaledb running' || fail "timescaledb is not running (aquarius pipeline up)"
 
 echo "== 1. Migrations on the real database ($DB)"
-docker compose build -q db-migrate || fail "build db-migrate image"
-docker compose run --rm -T db-migrate python -m aquarius_ingest.migrate --status || fail "migrate --status"
-if docker compose run --rm -T db-migrate python -m aquarius_ingest.migrate --status | grep -qE ' (pending|changed) '; then
-  echo "WARN  some migrations are not applied yet: docker compose up -d --build (or: docker compose run --rm db-migrate)"
+dc build -q db-migrate || fail "build db-migrate image"
+dc run --rm -T db-migrate python -m aquarius_ingest.migrate --status || fail "migrate --status"
+if dc run --rm -T db-migrate python -m aquarius_ingest.migrate --status | grep -qE ' (pending|changed) '; then
+  echo "WARN  some migrations are not applied yet: aquarius pipeline up (or: docker compose -f $DOCKER_DIR/$COMPOSE run --rm db-migrate)"
 fi
 
 echo
@@ -31,13 +32,13 @@ psql_db "$DB" -qc "DROP DATABASE IF EXISTS $TEST_DB" >/dev/null 2>&1
 psql_db "$DB" -qc "CREATE DATABASE $TEST_DB" || fail "create $TEST_DB"
 psql_db "$TEST_DB" -qc "CREATE EXTENSION IF NOT EXISTS timescaledb; CREATE EXTENSION IF NOT EXISTS postgis;" \
   >/dev/null 2>&1 || fail "extensions in $TEST_DB"
-docker compose run --rm -T -e PG_DSN="postgresql://$U:$P@db:5432/$TEST_DB" db-migrate || fail "migrations on an empty database"
+dc run --rm -T -e PG_DSN="postgresql://$U:$P@$DB_HOSTPORT/$TEST_DB" db-migrate || fail "migrations on an empty database"
 echo "  (second run must change nothing:)"
-docker compose run --rm -T -e PG_DSN="postgresql://$U:$P@db:5432/$TEST_DB" db-migrate | sed 's/^/  /'
+dc run --rm -T -e PG_DSN="postgresql://$U:$P@$DB_HOSTPORT/$TEST_DB" db-migrate | sed 's/^/  /'
 
 echo
 out=""; ok_files=0; n_files=0
-for f in db/tests/phase_*_test.sql; do        # phase_c_test.sql, phase_d_test.sql, ...
+for f in "$DB_DIR"/tests/phase_*_test.sql; do        # phase_c_test.sql, phase_d_test.sql, ...
   n_files=$((n_files+1))
   o=$(psql_db "$TEST_DB" -f - < "$f" 2>&1)
   echo "$o" | grep -E "PASS|FAIL|ERROR" | sed -E 's/^(psql:[^ ]+ )?(NOTICE|ERROR): +/  /'
@@ -47,7 +48,7 @@ $o"; break; }
 done
 if [[ $ok_files -eq $n_files ]]; then
   # every Grafana panel query must run on the test data (phase_d_test.sql's mission)
-  o=$(python3 tools/dashboard_sql.py d0000000-0000-4000-8000-000000000001 | psql_db "$TEST_DB" -q -o /dev/null -f - 2>&1)
+  o=$(PYTHONIOENCODING=utf-8 python3 tools/dashboard_sql.py d0000000-0000-4000-8000-000000000001 | psql_db "$TEST_DB" -q -o /dev/null -f - 2>&1)
   if echo "$o" | grep -q "DASHBOARD QUERIES OK"; then
     echo "  PASS D $(echo "$o" | grep -o 'DASHBOARD QUERIES OK ([0-9]*)' | grep -o '[0-9]*') dashboard queries run without error"
   else

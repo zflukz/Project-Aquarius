@@ -6,6 +6,7 @@ FROM ubuntu:24.04
 #   web_video_server camera in the browser (MJPEG)
 #   mavlink_mqtt.py  MAVLink telemetry of every drone -> MQTT -> Telegraf -> TimescaleDB -> Grafana
 #   rosbag2 (mcap)   record an experiment (T4)
+#   aquarius_bridge  PX4 + camera topics -> Kafka -> ingestion -> TimescaleDB (profile pipeline)
 # Runs in px4-sim's network namespace — it needs no change to the px4-sim image.
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -77,12 +78,24 @@ ENV PX4_NUM_DRONES=1 \
     MAVLINK_IN=udpin:0.0.0.0:14700 \
     MQTT_URL=mqtt://127.0.0.1:1883 \
     FLEET=sim \
+    KAFKA_BOOTSTRAP= \
     RECORD= \
     DATA_DIR=/data
 
 # mavlink_mqtt.py (MAVLink -> MQTT for Grafana). pip: noble's python3-paho-mqtt is 1.6 (no v2 API)
 RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* && \
     pip3 install --no-cache-dir --break-system-packages "pymavlink>=2.4.40" "paho-mqtt>=2,<3"
+
+# aquarius_bridge (Data-Pipeline/ros2_ws): the drones' PX4 + camera topics -> Kafka (profile pipeline).
+# Source comes from the build context `pipeline` (compose: additional_contexts; plain docker build:
+# --build-context pipeline=../Data-Pipeline). Last layers, so the ROS / agent / px4_msgs layers stay cached.
+RUN apt-get update && apt-get install -y python3-opencv && rm -rf /var/lib/apt/lists/* && \
+    pip3 install --no-cache-dir --break-system-packages "confluent-kafka==2.5.3"
+COPY --from=pipeline ros2_ws/src/aquarius_bridge /opt/aquarius_ws/src/aquarius_bridge
+RUN . /opt/ros/jazzy/setup.sh && . /opt/px4_ws/install/setup.sh && cd /opt/aquarius_ws && \
+    colcon build && rm -rf build log && \
+    printf '#!/usr/bin/env bash\nsource /opt/ros/jazzy/setup.bash\nsource /opt/px4_ws/install/setup.bash\nsource /opt/aquarius_ws/install/setup.bash\nexec "$@"\n' \
+        > /usr/local/bin/with-ros
 
 EXPOSE 8083 14700/udp
 VOLUME /data

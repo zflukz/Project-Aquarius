@@ -7,25 +7,26 @@
 # beginning (so EVERY message is delivered again), start it and let it catch up.
 # Pass = 0 duplicate (drone_id, ts) rows and the row count did not double.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.."                       # Data-Pipeline/
+. tools/stack.sh
 
-psql_q() { docker exec aquarius-db psql -U "${POSTGRES_USER:-aquarius}" -d "${POSTGRES_DB:-aquarius}" -tAc "$1"; }
+psql_q() { psql_in -d "$DB_NAME" -tAc "$1"; }
 dupes() { psql_q "SELECT count(*) FROM (SELECT drone_id, ts FROM telemetry GROUP BY 1,2 HAVING count(*) > 1) d;"; }
 rows()  { psql_q "SELECT count(*) FROM telemetry;"; }
 
 echo "1/4 stopping ingestion"
-docker compose stop ingestion >/dev/null
+dc stop ingestion >/dev/null
 before=$(rows)
 echo "    telemetry rows before: $before"
 
 echo "2/4 rewinding consumer group db-ingestion to the earliest offset (full replay)"
-docker exec aquarius-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 \
+docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server $(kafka_internal) \
   --group db-ingestion --reset-offsets --to-earliest --all-topics --execute >/dev/null
 
 echo "3/4 starting ingestion and waiting for it to catch up"
-docker compose start ingestion >/dev/null
+dc start ingestion >/dev/null
 for i in $(seq 1 60); do
-  lag=$(docker exec aquarius-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 \
+  lag=$(docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server $(kafka_internal) \
         --group db-ingestion --describe 2>/dev/null | awk 'NR>1 && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')
   [[ "$lag" == "0" && $i -gt 3 ]] && break
   sleep 2

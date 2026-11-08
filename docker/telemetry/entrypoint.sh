@@ -8,6 +8,9 @@
 #   4. mavlink_mqtt.py  udp :14700     PX4 MAVLink (3rd link per drone) -> MQTT aquarius/<FLEET>/drone/<i>/*
 #                                       -> Telegraf -> TimescaleDB -> Grafana :3000 (docker/communication_plan.md)
 #   5. RECORD=1                        ros2 bag (mcap) of RECORD_REGEX -> $DATA_DIR/bags/<date>
+#   6. aquarius_bridge                 PX4 /fmu/out/* + /uav_i/camera/image_raw of every drone -> Kafka
+#                                       (drone_id uav<i>) -> ingestion -> TimescaleDB. Waits until Kafka + its
+#                                       topics exist (compose profile pipeline), so it may start later.
 #
 # Must share px4-sim's network: PX4's uXRCE client sends to 127.0.0.1:8888, and Gazebo transport
 # discovery must reach the gz server -> network_mode host (VM) / service:px4-sim (local).
@@ -22,7 +25,8 @@
 #   MQTT_URL=mqtt://127.0.0.1:1883 (empty = no MQTT bridge)  MAVLINK_IN=udpin:0.0.0.0:14700  FLEET=sim
 #   RECORD (1 = record a bag)  RECORD_REGEX (topics)  DATA_DIR=/data
 #   GT_RATE=30 (Hz, ground truth; empty = off)
-#   ROS_SETUP PX4_MSGS_SETUP XRCE_LIB_DIR GT_SCRIPT MQTT_SCRIPT   paths (native installs)
+#   KAFKA_BOOTSTRAP (host:port, empty = no Kafka bridge)  MISSION_ID (empty = new UUID)  BRIDGE_IMAGE_FPS=2
+#   ROS_SETUP PX4_MSGS_SETUP XRCE_LIB_DIR GT_SCRIPT MQTT_SCRIPT AQ_BRIDGE_SETUP   paths (native installs)
 set -e
 # job control: non-interactive bash starts background jobs with SIGINT ignored, so cleanup's
 # kill -INT never reached ros2 bag (no metadata.yaml, bag unreadable). With -m they keep SIGINT.
@@ -47,6 +51,9 @@ BRIDGE_CONFIG=${BRIDGE_CONFIG:-/tmp/gz_bridge.yaml}
 GT_SCRIPT=${GT_SCRIPT:-/ground_truth.py}
 MQTT_SCRIPT=${MQTT_SCRIPT:-/mavlink_mqtt.py}
 export GT_RATE=${GT_RATE-30}
+KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP:-}
+AQ_BRIDGE_SETUP=${AQ_BRIDGE_SETUP:-/opt/aquarius_ws/install/setup.bash}
+AQ_BRIDGE_CONFIG=${AQ_BRIDGE_CONFIG:-/tmp/aquarius_bridge.yaml}
 export PX4_NUM_DRONES PX4_GZ_WORLD PX4_SIM_MODEL   # for ground_truth.py
 
 # camera sensor of the PX4 models (PX4-Autopilot Tools/simulation/gz/models, includes are merged
@@ -140,6 +147,59 @@ if [ "$RECORD" = "1" ]; then
     echo "recording '$RECORD_REGEX' -> $bag"
 fi
 
+# 6. the Gazebo drones -> Kafka (data pipeline). Drone i = uav<i>: PX4 namespace / (drone 0) or /uav_i,
+#    camera /uav_i/camera/image_raw (raw rgb8 from ros_gz_bridge -> JPEG). Sim time: images carry Gazebo
+#    time, the bridge maps PX4 timestamps onto the same clock (A4).
+if [ -n "$KAFKA_BOOTSTRAP" ] && [ -f "$AQ_BRIDGE_SETUP" ]; then
+    {
+        echo "aquarius_bridge:"
+        echo "  ros__parameters:"
+        echo "    kafka_bootstrap: \"$KAFKA_BOOTSTRAP\""
+        echo "    mission_id: \"${MISSION_ID:-}\""
+        echo "    image_input: raw"
+        awk -v f="${BRIDGE_IMAGE_FPS:-2}" 'BEGIN { printf "    max_image_fps: %.2f\n", f }'
+        echo "    drones:"
+        for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
+            ns=/uav_$i; [ "$i" = 0 ] && ns=/
+            echo "      - \"uav$i,$ns,/uav_$i/camera/image_raw\""
+        done
+    } > "$AQ_BRIDGE_CONFIG"
+    # Supervisor: start the bridge when Kafka + its topics exist, stop it when Kafka goes away
+    # (SIGTERM: background jobs of a subshell ignore SIGINT)
+    # (aquarius pipeline down), wait again. telemetry itself never restarts for the pipeline —
+    # a telemetry restart drops PX4's uXRCE session, and PX4 SITL has segfaulted on that reconnect.
+    (
+        host=${KAFKA_BOOTSTRAP%:*}; port=${KAFKA_BOOTSTRAP##*:}
+        kafka_open() { timeout 2 bash -c ">/dev/tcp/$host/$port" 2>/dev/null; }
+        source "$AQ_BRIDGE_SETUP"
+        trap 'kill -TERM $bpid 2>/dev/null; wait; exit 0' INT TERM
+        while true; do
+            echo "waiting for Kafka $KAFKA_BOOTSTRAP (compose profile pipeline) ..."
+            until kafka_open && python3 - <<EOF 2>/dev/null
+from confluent_kafka.admin import AdminClient
+t = AdminClient({"bootstrap.servers": "$KAFKA_BOOTSTRAP", "log_level": 0}).list_topics(timeout=5).topics
+raise SystemExit(0 if "telemetry" in t and "image-frames" in t else 1)
+EOF
+            do sleep 5; done
+            echo "Kafka up -> $PX4_NUM_DRONES drone(s) uav0..uav$((PX4_NUM_DRONES - 1)) -> $KAFKA_BOOTSTRAP"
+            # the node itself, not `ros2 run` (that exits on SIGTERM and leaves the node running)
+            "$(ros2 pkg prefix aquarius_bridge)/lib/aquarius_bridge/bridge" \
+                --ros-args --params-file "$AQ_BRIDGE_CONFIG" -p use_sim_time:=true &
+            bpid=$!
+            while kill -0 "$bpid" 2>/dev/null; do
+                kafka_open || { sleep 5; kafka_open; } \
+                    || { echo "Kafka gone -> stopping the bridge"; kill -TERM "$bpid" 2>/dev/null || true; }
+                sleep 10 & wait $! || true   # wait: a stop signal interrupts it at once
+            done
+            wait "$bpid" 2>/dev/null || true
+            sleep 5
+        done
+    ) > >(sed -u 's/^/[kafka] /') 2>&1 &
+    PIDS+=($!)
+elif [ -n "$KAFKA_BOOTSTRAP" ]; then
+    echo "WARN: no aquarius_bridge ($AQ_BRIDGE_SETUP) — rebuild the telemetry image; Kafka bridge off"
+fi
+
 echo "telemetry: $PX4_NUM_DRONES x ${MODEL} in '$PX4_GZ_WORLD' (GZ_PARTITION=$GZ_PARTITION, ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
 echo "  PX4 uORB  : /fmu/out/* (drone 0), /uav_<i>/fmu/out/* (drone i)   agent udp $XRCE_PORT"
 echo "  Gazebo    : /uav_<i>/gz/{imu,navsat,air_pressure,magnetometer,ground_truth}, /clock"
@@ -150,6 +210,7 @@ else
     echo "  camera    : none — $PX4_SIM_MODEL has no camera (PX4_SIM_MODEL=gz_x500_mono_cam_down, PX4_SYS_AUTOSTART=4014)"
 fi
 [ -n "$MQTT_URL" ] && echo "  MQTT      : $MAVLINK_IN -> $MQTT_URL aquarius/$FLEET/drone/<i>/*  (Grafana http://<host>:3000)"
+[ -n "$KAFKA_BOOTSTRAP" ] && echo "  Kafka     : uav0..uav$((PX4_NUM_DRONES - 1)) telemetry + camera -> $KAFKA_BOOTSTRAP (once the pipeline profile runs)"
 
 # exit (docker restarts us) as soon as one part dies
 wait -n "${PIDS[@]}"

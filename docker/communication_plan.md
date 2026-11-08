@@ -153,6 +153,11 @@ Raw IMU and the camera are deliberately **not** on MQTT; they stay in ROS 2 / ba
 
 ## 6. Kafka — when, and how
 
+> **2026-11-08:** Kafka now exists as compose profile `pipeline` — but for the **ROS 2 path** (the team's data
+> pipeline: `aquarius_bridge` in the telemetry container → Kafka → ingestion → TimescaleDB + PostGIS → Grafana
+> "Mission monitor"; detections / survivors / camera frames, schema-checked). MAVLink → MQTT → Telegraf stays as
+> described here. Mosquitto → Kafka (below) is still not done. See `README.md` → "Data pipeline".
+
 Add Kafka only when **at least one** of these is true:
 - Analyses need to replay or reprocess flights from the raw stream, and the TimescaleDB data isn't enough.
 - More than ~5 independent backend services consume the stream, at different speeds.

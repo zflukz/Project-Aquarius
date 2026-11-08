@@ -1,0 +1,7 @@
+# build context is the repo root — send only what the ingestion image needs
+*
+!docker/ingestion/requirements.txt
+!docker/ingestion/aquarius_ingest/
+!docker/db/migrations/
+!Data-Pipeline/schemas/
+**/__pycache__
