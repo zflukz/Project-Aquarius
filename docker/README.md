@@ -12,6 +12,7 @@ docker/
 ├── px4-sim/               PX4 SITL ×N + Gazebo Harmonic + Baylands cache + Xvfb/VNC + QGroundControl
 ├── telemetry/             ROS 2: XRCE agent, Gazebo bridge, camera web view, MAVLink→MQTT, ROS 2→Kafka bridge
 ├── grafana/               Grafana + datasource + dashboards (aquarius.json Fleet, mission.json Mission)
+├── timescaledb/           small PostgreSQL 17 + TimescaleDB + PostGIS image (PostGIS Alpine + TimescaleDB files)
 ├── db/migrations/         pipeline tables / functions (applied by db-migrate), db/tests/ = checks
 ├── ingestion/             Kafka → TimescaleDB consumer + migration runner (image aquarius-ingestion)
 ├── imagestream/           Kafka image-frames → MJPEG for the Mission dashboard
@@ -27,10 +28,10 @@ docker/
 | `aquarius-grafana` | `grafana/` | local, server |
 | `aquarius-ingestion` | `ingestion/` + `db/migrations/` + `../Data-Pipeline/schemas/` | local, server (profile pipeline) |
 | `aquarius-imagestream` | `imagestream/` | local, server (profile pipeline) |
+| `aquarius-timescaledb` | `timescaledb/` (PostGIS 3.5 Alpine + TimescaleDB 2.22.1, ~200 MB download / 750 MB disk) | local, server |
 | `aquarius-drone-control` | `drone-control/` + `../Drone-Control/` | local, control |
 
-Public images: `eclipse-mosquitto:2`, `telegraf:1.36`, `timescale/timescaledb-ha:pg17.6-ts2.22.1` (TimescaleDB +
-PostGIS), `apache/kafka:3.8.0`, `provectuslabs/kafka-ui`, `dougw/novnc`.
+Public images: `eclipse-mosquitto:2`, `telegraf:1.36`, `apache/kafka:3.8.0`, `provectuslabs/kafka-ui`, `dougw/novnc`.
 
 The `aquarius` command (`../scripts/aquarius`, guide [`../AQUARIUS_CLI.md`](../AQUARIUS_CLI.md)) wraps everything
 below: `aquarius init`, `drones N`, `pipeline up`, `start mission …`, `status`, `rtl`, `urls`, `update`.
@@ -89,7 +90,7 @@ echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin     # token with 
 cd docker
 export PX4_REF=$(docker run --rm --entrypoint git ghcr.io/zflukz/aquarius-px4-sim -C /px4 rev-parse HEAD)  # px4_msgs = PX4
 docker compose -f compose.local.yml --profile pipeline build
-docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana ingestion imagestream drone-control
+docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana timescaledb ingestion imagestream drone-control
 ```
 
 `TAG=v0.3` in front of both commands for a versioned release. GHCR packages start **private**: make them public or
@@ -270,7 +271,9 @@ dies. ROS CLI: `docker exec telemetry with-ros ros2 topic list`. Topic details: 
 | `MISSION_ID` · `BRIDGE_IMAGE_FPS` | new UUID · 2 | pipeline |
 | `RECORD` · `RECORD_REGEX` | – · PX4 + gz topics | ros2 bag (mcap) |
 
-**timescaledb** — PostgreSQL 17 + TimescaleDB 2.22 + PostGIS 3.6, DB / user `aquarius`, volume `tsdb-data`,
+**timescaledb** — own image `aquarius-timescaledb`: PostgreSQL 17 + TimescaleDB 2.22 + PostGIS 3.5 (TimescaleDB's
+.so / control / install files copied from the official Alpine image into `postgis/postgis:17-3.5-alpine`; a new
+TimescaleDB version = `TIMESCALEDB_VERSION` + upgrade scripts, see the Dockerfile). DB / user `aquarius`, volume `tsdb-pgdata`,
 `TSDB_MEMORY` (1 GB) for tuning, VM listens on 127.0.0.1 (`TSDB_PORT`). `TSDB_PASSWORD` / `GRAFANA_ADMIN_PASSWORD`
 apply to empty volumes only.
 
@@ -299,7 +302,7 @@ pipeline ≈ 0.34** (CPU rendering). Use `HEADLESS=1`, `QGC=0`, fewer camera dro
 | `db-migrate` exited 1 | `docker logs db-migrate` names the failing file |
 | `KAFKA_PARTITIONS` change ignored | topics exist: `pipeline down`, `docker volume rm aquarius-<mode>_kafka-data`, `pipeline up` |
 | Kafka unreachable from another machine | `KAFKA_ADVERTISED_HOST=<this host's IP>` + recreate kafka |
-| Old DB volume | before 2026-11-08 the DB was `timescaledb-data` (no PostGIS): `docker volume rm aquarius-<mode>_timescaledb-data` |
+| Old DB volumes | unused since 2026-11-08: `timescaledb-data` (no PostGIS), `tsdb-data` (timescaledb-ha test) — `docker volume rm aquarius-<mode>_timescaledb-data aquarius-<mode>_tsdb-data` |
 
 ## Future plan
 

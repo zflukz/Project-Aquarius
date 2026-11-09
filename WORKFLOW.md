@@ -88,10 +88,10 @@ the split setup, so a passing local test is a good check before you deploy.
 echo <TOKEN> | docker login ghcr.io -u zflukz --password-stdin   # once, token with write:packages
 cd docker
 docker compose -f compose.local.yml --profile pipeline build
-docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana ingestion imagestream drone-control
+docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry grafana timescaledb ingestion imagestream drone-control
 ```
 
-Images: `ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana` (pulled by the VM),
+Images: `ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-timescaledb` (pulled by the VM),
 `…/aquarius-ingestion`, `…/aquarius-imagestream` (VM, only with the data pipeline) and `…/aquarius-drone-control`
 (control computer) — `REGISTRY` / `TAG` in `docker/.env`. Make the packages public on
 GitHub, or `docker login ghcr.io` on the VM. **Until you push, the VM pulls the old images** (or fails with `denied`
@@ -385,6 +385,7 @@ Project-Aquarius/
 │   │   ├── entrypoint.sh           PX4 + Gazebo → ROS 2 topics, camera :8083, MQTT bridge, ros2 bag
 │   │   └── mavlink_mqtt.py         PX4 MAVLink → MQTT (Grafana dashboard)
 │   ├── grafana/                    Grafana image: datasource + dashboards Fleet (aquarius.json) + Mission (mission.json)
+│   ├── timescaledb/                small PostgreSQL 17 + TimescaleDB + PostGIS image
 │   ├── db/migrations/, db/tests/   pipeline tables / functions (db-migrate) and their checks
 │   ├── ingestion/                  Kafka → TimescaleDB consumer + migration runner
 │   ├── imagestream/                Kafka camera frames → MJPEG :8090 (Mission dashboard)

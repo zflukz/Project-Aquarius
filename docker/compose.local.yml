@@ -131,7 +131,9 @@ services:
     restart: unless-stopped
 
   timescaledb:
-    image: timescale/timescaledb-ha:pg17.6-ts2.22.1   # TimescaleDB + PostGIS (pipeline: mission / grid tables)
+    build:
+      context: ./timescaledb
+    image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-timescaledb:${TAG:-latest}   # PostgreSQL 17 + TimescaleDB + PostGIS (small)
     container_name: timescaledb
     networks:
       - drone-net
@@ -149,7 +151,7 @@ services:
         target: /docker-entrypoint-initdb.d/zz-aquarius.sql
         mode: 0444
     volumes:
-      - tsdb-data:/home/postgres/pgdata
+      - tsdb-pgdata:/var/lib/postgresql/data
     healthcheck:                            # TCP: the init server (first start) only listens on the socket
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U aquarius -d aquarius"]
       interval: 5s
@@ -356,7 +358,7 @@ networks:
 
 volumes:
   gz-fuel-cache:
-  tsdb-data:                                # TimescaleDB: flight history (TSDB_RETENTION) + pipeline tables
+  tsdb-pgdata:                              # TimescaleDB: flight history (TSDB_RETENTION) + pipeline tables
   kafka-data:                               # profile pipeline
   grafana-data:
 

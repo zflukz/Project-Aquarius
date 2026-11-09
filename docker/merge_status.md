@@ -8,7 +8,7 @@ Change log entry: `CLAUDE.md` → "Change log — data pipeline merged into dock
 | # | Topic | Choice |
 | :--- | :--- | :--- |
 | 1 | Layout | infra → `docker/`, code → `Data-Pipeline/` |
-| 2 | Database | **one** TimescaleDB + PostGIS (`timescale/timescaledb-ha:pg17.6-ts2.22.1`) for Telegraf + pipeline tables |
+| 2 | Database | **one** TimescaleDB + PostGIS for Telegraf + pipeline tables — first `timescaledb-ha` (commit dd5a2d4), then (user: option A) own small image **`aquarius-timescaledb`** |
 | 3 | Kafka | both ways: profile `pipeline` on demand (`aquarius pipeline up/down`) **and** always on (`COMPOSE_PROFILES=pipeline` in `.env`, `aquarius pipeline on/off`, `init --pipeline`) |
 | 4 | Grafana | one `aquarius-grafana` 12.2, both dashboards baked in; home = Fleet |
 | 5 | Where | user unsure → Claude chose: both compose files, behind the profile (costs nothing when off) |
@@ -32,7 +32,8 @@ Change log entry: `CLAUDE.md` → "Change log — data pipeline merged into dock
 
 ## Changed files
 
-- `docker/compose.local.yml`, `compose.server.yml`: `timescaledb` → ha image, volume `tsdb-data` (`/home/postgres/pgdata`);
+- `docker/compose.local.yml`, `compose.server.yml`: `timescaledb` → `aquarius-timescaledb` (`docker/timescaledb/Dockerfile`),
+  volume `tsdb-pgdata` (`/var/lib/postgresql/data`);
   profile `pipeline`: `kafka`, `kafka-init`, `db-migrate`, `ingestion`, `imagestream`, `kafka-ui` (VM: host network,
   Kafka INTERNAL 127.0.0.1:19092, EXTERNAL 9092 `KAFKA_ADVERTISED_HOST`, kafka-ui `SERVER_PORT=8084`); telemetry env
   `KAFKA_BOOTSTRAP`, `MISSION_ID`, `BRIDGE_IMAGE_FPS`; local telemetry build `additional_contexts: pipeline: ../Data-Pipeline`.
@@ -85,13 +86,15 @@ Change log entry: `CLAUDE.md` → "Change log — data pipeline merged into dock
    `aquarius pipeline down` restarted `telemetry`. Intermittent, PX4-side. **Fixed on our side and tested:** the
    bridge supervisor in `telemetry/entrypoint.sh` starts / stops only the bridge, the CLI never restarts telemetry.
    Advice stays: avoid restarting telemetry alone mid-flight; after px4-sim restarts (local) telemetry must follow.
-2. **`timescaledb-ha` is 6.8 GB** unpacked (estimate given to the user was ~1 GB more than the old 1.2 GB image).
-   Alternative if too big for the VM: own small image `FROM timescale/timescaledb:2.22.1-pg17` + PostGIS (`apk add`),
-   pushed as `aquarius-timescaledb`. **User decision pending.**
+2. **`timescaledb-ha` was 6.8 GB** on disk / 1.5 GB download. **Done (option A):** `aquarius-timescaledb` =
+   `postgis/postgis:17-3.5-alpine` + TimescaleDB files copied from `timescale/timescaledb:2.22.1-pg17` (its .so files
+   need only musl + the postgres binary) → **753 MB disk / ~200 MB download**. Verified: timescaledb 2.22.1, postgis
+   3.5.7, tune OK, migrations, Telegraf + pipeline data from the running sim, `phase_c_check.sh` PASS, Grafana OK.
+   (`apk add postgis` on the TimescaleDB image would not work: Alpine's package targets Alpine's own PostgreSQL.)
 3. RTF 0.34 with 2 camera drones + pipeline on this PC (CPU rendering; 1 camera drone ≈ 0.9–1.0). Pipeline `ts` is
    sim time, so it lags the wall clock when RTF < 1.
-4. Old volume `aquarius-local_timescaledb-data` (pre-PostGIS DB) is unused now — delete when sure:
-   `docker volume rm aquarius-local_timescaledb-data`.
+4. Old volumes unused now — delete when sure: `docker volume rm aquarius-local_timescaledb-data aquarius-local_tsdb-data`
+   (pre-PostGIS DB, and the timescaledb-ha test DB).
 5. Found + fixed while resuming: `kill -INT` did not stop the bridge (background jobs of a subshell ignore SIGINT) →
    SIGTERM; `ros2 run` exits on SIGTERM but leaves the node running (orphan, 2 bridges after `up`) → the node
    executable is started directly (`$(ros2 pkg prefix aquarius_bridge)/lib/aquarius_bridge/bridge`).
@@ -105,8 +108,8 @@ Change log entry: `CLAUDE.md` → "Change log — data pipeline merged into dock
 
 ## Next
 
-1. Decide the DB image (problem 2).
-2. Push images (README ②, incl. `ingestion`, `imagestream`) and test `compose.server.yml` on the VM
+1. ~~Decide the DB image~~ → done, `aquarius-timescaledb`.
+2. Push images (README ②, incl. `timescaledb`, `ingestion`, `imagestream`) and test `compose.server.yml` on the VM
    (`aquarius init server --pipeline`, host network Kafka 127.0.0.1:19092).
 3. Optional: `Data-Pipeline/tools/phase_b_check.sh` while flying 2 drones, `check_dedupe.sh`, headless-Chrome
    screenshot of the Mission dashboard, look at problem 7.

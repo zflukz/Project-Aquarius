@@ -33,7 +33,7 @@ a separate computer, later real drones.
 
 ## Architecture (Docker)
 
-Three modes, same images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-drone-control`; profile `pipeline` adds `…/aquarius-ingestion`, `…/aquarius-imagestream`):
+Three modes, same images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telemetry`, `…/aquarius-grafana`, `…/aquarius-drone-control`; `…/aquarius-timescaledb`; profile `pipeline` adds `…/aquarius-ingestion`, `…/aquarius-imagestream`):
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
@@ -349,9 +349,11 @@ Full status, decisions, file list, verification and next steps: **`docker/merge_
 - Layout: infra → `docker/` (`db/migrations`, `db/tests`, `ingestion/`, `imagestream/`, `grafana/build_dashboards.py`,
   `grafana/dashboards/mission.json`, Kafka topics inline in compose), code → **`Data-Pipeline/`**. `data/` removed;
   its README merged into `docker/README.md` (rewritten: 312 lines, was 551).
-- **One DB:** `timescale/timescaledb-ha:pg17.6-ts2.22.1` (TimescaleDB 2.22 + PostGIS 3.6), volume **`tsdb-data`**
-  (was `timescaledb-data`, image without PostGIS). Telegraf tables + migration tables side by side. Image 6.8 GB →
-  smaller own image is an open user decision.
+- **One DB:** own small image **`aquarius-timescaledb`** (`docker/timescaledb/`: `postgis/postgis:17-3.5-alpine` +
+  TimescaleDB 2.22.1 .so / control / install SQL + `timescaledb-tune` + official init scripts copied from
+  `timescale/timescaledb:2.22.1-pg17`, `shared_preload_libraries` in the conf sample). ~200 MB download / 753 MB disk
+  vs `timescaledb-ha` 1.5 GB / 6.8 GB (first tried, committed in dd5a2d4). Volume **`tsdb-pgdata`**
+  (`/var/lib/postgresql/data`). Telegraf tables + migration tables side by side.
 - **One Grafana** (`aquarius-grafana` 12.2): Fleet (home) + Mission monitor, datasource uid `aquarius-tsdb`,
   `GF_PANELS_DISABLE_SANITIZE_HTML=true`.
 - **Profile `pipeline`** in both compose files: kafka (KRaft, heap 512 MB), kafka-init, db-migrate, ingestion,
@@ -369,7 +371,10 @@ Full status, decisions, file list, verification and next steps: **`docker/merge_
   down` → `up` with 2 drones: bridge 1 → 0 → 1 process, px4-sim / telemetry not restarted, rows again for uav0 + uav1.
 - Docs: `WORKFLOW.md` (1b push list, 4a pipeline, file map), `AQUARIUS_CLI.md` (`pipeline`, `--pipeline`,
   `logs pipeline`, troubleshooting), notes in `communication_plan.md` §6 and `telemetry_plan.md` §4.
-- Open: DB image size decision (6.8 GB ha image vs own small TimescaleDB + PostGIS image), push of the two new images,
+- Small DB image verified: extensions timescaledb 2.22.1 + postgis 3.5.7, tune (shared_buffers 256MB), migrations,
+  8 Telegraf hypertables + pipeline `telemetry` for uav0 / uav1 from the running sim, `phase_c_check.sh` all PASS,
+  Grafana datasource OK.
+- Open: push of the three new images (timescaledb, ingestion, imagestream),
   VM test of `compose.server.yml` with the profile, 2 old negative-`ts_us` rejects (bridge clock edge case).
 
 ## Benchmark native vs Docker — `docker/bench_sim.sh` (2026-10-16)
