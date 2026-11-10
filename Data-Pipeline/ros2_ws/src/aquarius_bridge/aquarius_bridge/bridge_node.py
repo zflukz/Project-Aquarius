@@ -23,10 +23,12 @@ from sensor_msgs.msg import CompressedImage, Image
 from px4_msgs.msg import (BatteryStatus, VehicleAttitude, VehicleGlobalPosition,
                           VehicleLocalPosition, VehicleStatus)
 
-from .core import (ClockOffsetEstimator, Counters, DroneState, EpochMapper,
+from .core import (ClockOffsetEstimator, plausible_time, Counters, DroneState, EpochMapper,
                    RateLimiter, build_telemetry, encode_json, image_headers,
                    is_jpeg, jpeg_dimensions, parse_drone_specs, stamp_to_us)
 from .kafka_out import KafkaOut
+
+BAD_TIME = -1   # _px4_to_epoch_us: sample dropped because its mapped time is not plausible
 
 # PX4 publishes with BEST_EFFORT; a RELIABLE subscriber would receive nothing.
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -135,12 +137,23 @@ class BridgeNode(Node):
 
     # -- telemetry ----------------------------------------------------------
     def _px4_to_epoch_us(self, did: str, px4_ts: int):
+        """UTC µs of a PX4 sample; None while the clocks are not known yet, BAD_TIME if not plausible."""
         if not self.epoch.ready:
             return None
         if self.px4_time_mode == "already_ros_time":
-            return self.epoch.to_epoch_us(px4_ts)
-        est = self.offsets[did]
-        return self.epoch.to_epoch_us(est.to_ros_us(px4_ts)) if est.ready else None
+            ros_us = int(px4_ts)
+        else:
+            est = self.offsets[did]
+            if not est.ready:
+                return None
+            ros_us = est.to_ros_us(px4_ts)
+        if not plausible_time(ros_us, self._ros_now_us()):
+            # e.g. a sample still stamped in PX4's previous clock domain right after a time-sync step
+            self.counters.inc(self.counters.dropped, "telemetry(bad-time)")
+            self.get_logger().warn(f"{did}: PX4 sample time not plausible, dropped (offset settling?)",
+                                   throttle_duration_sec=5.0)
+            return BAD_TIME
+        return self.epoch.to_epoch_us(ros_us)
 
     def _publish_telemetry(self):
         for d in self.drones:
@@ -149,6 +162,9 @@ class BridgeNode(Node):
                 continue
             ts_us = self._px4_to_epoch_us(d.drone_id, st.global_ts)
             if ts_us is None:
+                continue                                   # clocks not known yet: try again next tick
+            if ts_us == BAD_TIME:
+                st.last_sent_global_ts = st.global_ts      # drop this sample once, wait for the next
                 continue
             msg = build_telemetry(d.drone_id, self.mission_id, st, ts_us)
             if self.kafka.send_telemetry(d.drone_id, encode_json(msg)):
@@ -208,7 +224,8 @@ class BridgeNode(Node):
 
     # -- housekeeping -------------------------------------------------------
     def _log_stats(self):
-        offs = " ".join(f"{k}:{v.offset_us / 1e6:.3f}s" for k, v in self.offsets.items() if v.ready)
+        offs = " ".join(f"{k}:{v.offset_us / 1e6:.3f}s" + (f"(resets {v.resets})" if v.resets else "")
+                        for k, v in self.offsets.items() if v.ready)
         self.get_logger().info(f"[stats] {self.counters.summary_and_reset()} "
                                f"| kafka errors={self.kafka.take_error_count()} | px4 offset {offs or 'n/a'}")
 

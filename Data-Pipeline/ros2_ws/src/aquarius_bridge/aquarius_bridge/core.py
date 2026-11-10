@@ -70,14 +70,40 @@ class ClockOffsetEstimator:
     window is the best estimate of the true clock offset. This is the same idea
     as NTP / Cristian's algorithm, and it means the sample time (not the receive
     time) ends up in ts_us, as A4 requires.
+
+    Two things make the first seconds unreliable, so they are handled here:
+      * `ready` only after `min_samples` samples, so one early sample with an
+        unusual delay does not set the offset.
+      * PX4 can switch clock domain while running (uXRCE time sync converging,
+        PX4 reboot): its timestamps then step. A step that makes d smaller is
+        taken at once (it is the new minimum). A step that makes d larger would
+        be hidden by the old minimum, so `jump_confirm` samples in a row that are
+        more than `jump_us` above it start the estimate again (`resets` counts it).
     """
 
-    def __init__(self, window: int = 500):
+    def __init__(self, window: int = 500, min_samples: int = 20,
+                 jump_us: int = 1_000_000, jump_confirm: int = 20):
         self._samples: Deque[int] = deque(maxlen=window)
         self._min: Optional[int] = None
+        self.min_samples = min_samples
+        self.jump_us = jump_us
+        self.jump_confirm = jump_confirm
+        self._above: Deque[int] = deque(maxlen=jump_confirm)
+        self.resets = 0
 
     def observe(self, px4_ts_us: int, ros_now_us: int) -> None:
         d = int(ros_now_us) - int(px4_ts_us)
+        if self._min is not None and d > self._min + self.jump_us:
+            self._above.append(d)
+            if len(self._above) >= self.jump_confirm:     # PX4 clock stepped back: start over
+                self._samples.clear()
+                self._samples.extend(self._above)
+                self._min = min(self._above)
+                self._above.clear()
+                self.resets += 1
+                return
+        else:
+            self._above.clear()
         if len(self._samples) == self._samples.maxlen and self._samples[0] == self._min:
             self._samples.append(d)
             self._min = min(self._samples)
@@ -87,7 +113,7 @@ class ClockOffsetEstimator:
 
     @property
     def ready(self) -> bool:
-        return self._min is not None
+        return self._min is not None and len(self._samples) >= self.min_samples
 
     @property
     def offset_us(self) -> int:
@@ -97,6 +123,17 @@ class ClockOffsetEstimator:
 
     def to_ros_us(self, px4_ts_us: int) -> int:
         return int(px4_ts_us) + self.offset_us
+
+
+def plausible_time(sample_ros_us: int, ros_now_us: int,
+                   max_age_us: int = 10_000_000, max_future_us: int = 1_000_000) -> bool:
+    """A mapped sample time must lie between `max_age_us` ago and `max_future_us` ahead.
+
+    Catches samples still stamped in PX4's previous clock domain right after a
+    step (they map to near 0, i.e. 1970, or far into the past / future) so they
+    are dropped in the bridge instead of reaching Kafka with a wrong time.
+    """
+    return ros_now_us - max_age_us <= sample_ros_us <= ros_now_us + max_future_us
 
 
 class EpochMapper:
@@ -111,10 +148,19 @@ class EpochMapper:
     def __init__(self, use_sim_time: bool):
         self.use_sim_time = use_sim_time
         self._offset: Optional[int] = None if use_sim_time else 0
+        self._last_ros: Optional[int] = None
+        self.relatches = 0
 
     def latch(self, wall_now_us: int, ros_now_us: int) -> None:
-        if self._offset is None and ros_now_us > 0:
+        """Take the offset once; take it again if the sim clock jumps back (Gazebo restarted)."""
+        if not self.use_sim_time or ros_now_us <= 0:
+            return
+        if self._offset is not None and self._last_ros is not None and ros_now_us < self._last_ros - 1_000_000:
+            self._offset = None
+            self.relatches += 1
+        if self._offset is None:
             self._offset = int(wall_now_us) - int(ros_now_us)
+        self._last_ros = int(ros_now_us)
 
     @property
     def ready(self) -> bool:
