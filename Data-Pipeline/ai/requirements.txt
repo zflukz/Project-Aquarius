@@ -1,0 +1,6 @@
+confluent-kafka>=2.3
+numpy
+opencv-python-headless
+jsonschema>=4.18
+# real model (optional, large: pulls PyTorch):
+# ultralytics
