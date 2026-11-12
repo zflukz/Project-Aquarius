@@ -8,7 +8,7 @@ evidence images and lag handling are done.
 ```
 PX4/Gazebo camera ─► aquarius_bridge ─► Kafka image-frames ─┬─► imagestream :8090 / Grafana (view)
                      (2 fps, JPEG, GPS-synced ts_us)        └─► ai_detection.py  (this folder)
-                                                                  │  detector.detect(image)
+                                                                  │  detector.detect(image, meta)
                                                                   ▼
                                     Kafka detections ─► ingestion ─► TimescaleDB `detections`
                                     evidence JPEG ─► results/evidence/<drone>/<ts_us>_<frame>.jpg
@@ -23,7 +23,7 @@ take frames from each other.
 | :--- | :--- |
 | `ai_detection.py` | the service: consumer `image-frames` → detector → producer `detections` |
 | `detectors.py` | detectors: `FakeDetector` (no model), `UltralyticsDetector` (YOLO); add yours here |
-| `test_ai_detection.py` | 14 unit tests, no Kafka needed (one runs `main()` against a stand-in Kafka) |
+| `test_ai_detection.py` | 16 unit tests, no Kafka needed (one runs `main()` against a stand-in Kafka) |
 | `requirements.txt` | `confluent-kafka`, `numpy`, `opencv-python-headless`, `jsonschema` (+ optional `ultralytics`) |
 
 ## Run
@@ -102,7 +102,7 @@ class MyDetector:
     def __init__(self, path, conf):
         self.net = load(path); self.conf = conf
 
-    def detect(self, image):                 # numpy BGR (H, W, 3)
+    def detect(self, image, meta=None):      # numpy BGR (H, W, 3); meta = drone_id, ts_us, frame_id, ...
         return [Detection("person", score, x1, y1, x2, y2) for ... in self.net(image) if score >= self.conf]
 ```
 

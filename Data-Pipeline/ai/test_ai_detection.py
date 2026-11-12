@@ -100,6 +100,22 @@ class TestDetectorsAndHelpers(unittest.TestCase):
         box = FakeDetector(every=1).detect(img)[0]
         self.assertEqual(box.center, (320, 240))
 
+    def test_fake_counts_per_drone(self):
+        """Interleaved uav1, uav2, ... with every=4: both drones get a hit every 4th of their own frames."""
+        d = FakeDetector(every=4)
+        img = np.zeros((480, 640, 3), np.uint8)
+        hits = {"uav1": 0, "uav2": 0}
+        for i in range(16):
+            did = "uav1" if i % 2 == 0 else "uav2"
+            hits[did] += bool(d.detect(img, {"drone_id": did}))
+        self.assertEqual(hits, {"uav1": 2, "uav2": 2})
+
+    def test_detect_fn_old_signature(self):
+        class Old:
+            version = "old"
+            def detect(self, image): return [Detection("person", 0.5, 1, 1, 5, 5)]
+        self.assertEqual(len(ai.detect_fn(Old())(None, META)), 1)
+
     def test_make_detector(self):
         self.assertEqual(make_detector("fake").every, 10)
         self.assertEqual(make_detector("fake:4").every, 4)
@@ -134,7 +150,7 @@ class TestDetectorsAndHelpers(unittest.TestCase):
 
 
 class TestLoopWithFakeKafka(unittest.TestCase):
-    """main() with a stand-in confluent_kafka: 4 frames in -> 2 detections out (fake:2), 1 stale frame skipped."""
+    """main() with a stand-in confluent_kafka: 2 drones x 4 frames, fake:2 -> 2 detections per drone, 1 stale frame skipped."""
 
     def test_main_loop(self):
         import os
@@ -146,18 +162,19 @@ class TestLoopWithFakeKafka(unittest.TestCase):
         data = jpeg()
 
         class Msg:
-            def __init__(self, i, ts):
-                self.i, self.ts = i, ts
+            def __init__(self, i, ts, drone="uav0"):
+                self.i, self.ts, self.drone = i, ts, drone.encode()
 
             def error(self): return None
-            def key(self): return b"uav0"
+            def key(self): return self.drone
             def value(self): return data
 
             def headers(self):
-                return [("drone_id", b"uav0"), ("ts_us", str(self.ts).encode()), ("frame_id", str(self.i).encode()),
+                return [("drone_id", self.drone), ("ts_us", str(self.ts).encode()), ("frame_id", str(self.i).encode()),
                         ("width", b"640"), ("height", b"480")]
 
-        queue = [Msg(i, now_us) for i in range(4)] + [Msg(99, now_us - 60_000_000)]
+        # uav0 and uav1 interleaved (like real drones), 4 frames each, then one stale uav0 frame
+        queue = [Msg(i, now_us, d) for i in range(4) for d in ("uav0", "uav1")] + [Msg(99, now_us - 60_000_000)]
         sent, commits = [], []
 
         class Consumer:
@@ -186,7 +203,7 @@ class TestLoopWithFakeKafka(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as t:
                 rc = ai.main(["--detector", "fake:2", "--evidence-dir", t])
-                files = sorted(p.name for p in Path(t, "uav0").glob("*.jpg"))
+                files = {d: sorted(p.name for p in Path(t, d).glob("*.jpg")) for d in ("uav0", "uav1")}
         finally:
             signal.signal(signal.SIGINT, old_int)
             if old is None:
@@ -194,9 +211,12 @@ class TestLoopWithFakeKafka(unittest.TestCase):
             else:
                 sys.modules["confluent_kafka"] = old
         self.assertEqual(rc, 0)
-        self.assertEqual([(t, k, m["frame_id"]) for t, k, m in sent], [("detections", "uav0", 1), ("detections", "uav0", 3)])
-        self.assertEqual(len(commits), 5)                     # stale frame committed too, never re-read
-        self.assertEqual(files, [f"{now_us}_000001.jpg", f"{now_us}_000003.jpg"])
+        self.assertEqual([(t, k, m["frame_id"]) for t, k, m in sent],
+                         [("detections", "uav0", 1), ("detections", "uav1", 1),
+                          ("detections", "uav0", 3), ("detections", "uav1", 3)])
+        self.assertEqual(len(commits), 9)                     # stale frame committed too, never re-read
+        want = [f"{now_us}_000001.jpg", f"{now_us}_000003.jpg"]
+        self.assertEqual(files, {"uav0": want, "uav1": want})
 
 
 if __name__ == "__main__":

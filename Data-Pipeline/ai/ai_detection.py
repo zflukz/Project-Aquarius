@@ -39,6 +39,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from detectors import Detection, make_detector  # noqa: E402
+import inspect  # noqa: E402
 
 log = logging.getLogger("ai_detection")
 DRONE_RE = re.compile(r"^uav[0-9]+$")
@@ -122,6 +123,14 @@ def load_validator():
         else jsonschema.Draft7Validator(schema)
 
 
+def detect_fn(detector):
+    """detector.detect as f(image, meta): passes meta only if detect() takes a 2nd argument."""
+    params = list(inspect.signature(detector.detect).parameters.values())
+    if len(params) >= 2 or any(p.kind == p.VAR_POSITIONAL for p in params):
+        return detector.detect
+    return lambda image, meta: detector.detect(image)
+
+
 # ---------- Kafka loop ----------
 
 def main(argv=None):
@@ -144,6 +153,7 @@ def main(argv=None):
     from confluent_kafka import Consumer, KafkaException, Producer
 
     detector = make_detector(args.detector, conf=args.conf)
+    detect = detect_fn(detector)
     validator = load_validator()
     consumer = Consumer({"bootstrap.servers": args.bootstrap, "group.id": args.group,
                          "auto.offset.reset": "earliest" if args.from_beginning else "latest",
@@ -176,7 +186,7 @@ def main(argv=None):
                     else:
                         stats["frames"] += 1
                         t0 = time.perf_counter()
-                        dets = detector.detect(img)
+                        dets = detect(img, meta)
                         stats["infer_ms"] += (time.perf_counter() - t0) * 1000
                         h, w = img.shape[:2]
                         msg = build_message(meta, dets, detector.version, w, h)

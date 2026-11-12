@@ -1,7 +1,8 @@
 """Person detectors for ai_detection.py. Put the team's model in a class like these.
 
 A detector gets one image (numpy array, H x W x 3, BGR like OpenCV) and returns
-a list of Detection. Coordinates are pixels from the top-left corner.
+a list of Detection. Coordinates are pixels from the top-left corner. It may also
+take `meta` (drone_id, ts_us, frame_id, width, height of that frame) if it needs it.
 
     FakeDetector         no model: "finds" one person in every Nth frame (pipeline tests)
     UltralyticsDetector  any YOLO .pt / .onnx through the `ultralytics` package (class 0 = person)
@@ -10,7 +11,7 @@ Add your own:
 
     class MyDetector:
         version = "my-model-v1"          # goes into detections.model_version
-        def detect(self, image):          # -> list[Detection]
+        def detect(self, image, meta=None):   # -> list[Detection]; meta is optional
             ...
 """
 from __future__ import annotations
@@ -34,19 +35,22 @@ class Detection:
 
 
 class FakeDetector:
-    """One fake person in the middle of every `every`-th frame. Tests the whole
-    path (Kafka -> AI -> detections -> evidence image) without a model or real people."""
+    """One fake person in the middle of every `every`-th frame of each drone. Tests the
+    whole path (Kafka -> AI -> detections -> evidence image) without a model or real people.
+    Counted per drone: one shared counter hit the same drone every time when the drones'
+    frames arrive interleaved (uav1, uav2, uav1, uav2 with every=4 -> only uav2)."""
 
     version = "fake-v1"
 
     def __init__(self, every: int = 10, size_px: int = 40):
         self.every = max(1, every)
         self.size = size_px
-        self._n = 0
+        self._n = {}
 
-    def detect(self, image) -> List[Detection]:
-        self._n += 1
-        if self._n % self.every:
+    def detect(self, image, meta=None) -> List[Detection]:
+        drone = (meta or {}).get("drone_id", "")
+        self._n[drone] = self._n.get(drone, 0) + 1
+        if self._n[drone] % self.every:
             return []
         h, w = image.shape[:2]
         s = min(self.size, w // 2, h // 2)
@@ -65,7 +69,7 @@ class UltralyticsDetector:
         self.device = device
         self.version = f"yolo:{model_path.rsplit('/', 1)[-1]}"
 
-    def detect(self, image) -> List[Detection]:
+    def detect(self, image, meta=None) -> List[Detection]:
         res = self.model.predict(image, conf=self.conf, classes=self.classes, device=self.device, verbose=False)[0]
         names = res.names
         out = []
