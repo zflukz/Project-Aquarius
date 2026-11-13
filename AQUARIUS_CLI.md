@@ -36,6 +36,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `aquarius drones [N]` | show / change the number of simulated drones (1–10), restarts px4-sim + telemetry |
 | `aquarius update [local\|server\|control]` | newest compose files + images, restart what changed (VM / control: pull only, local: rebuild) |
 | `aquarius pipeline [up\|down\|on\|off]` | data pipeline: Gazebo drones → Kafka → TimescaleDB → Grafana *Mission monitor* (no argument = status) |
+| `aquarius path [mqtt\|kafka\|both]` | which telemetry stack feeds Grafana (MAVLink → MQTT, uXRCE → Kafka, or both); restarts px4-sim + telemetry (no argument = show) |
 | `aquarius start mission LAT,LON [LAT,LON ...]` | fly to the points in order, then return home and land |
 | `aquarius start coverage [LAT,LON]` | MCPP coverage flight (lawnmower path) over an area centred on the point |
 | `aquarius status` | containers, then armed / flight mode / battery / position / GPS of a drone |
@@ -158,6 +159,30 @@ The bridge inside `telemetry` notices Kafka coming / going by itself (drones `ua
 telemetry are never restarted for it. A new mission id is used each time telemetry starts (`MISSION_ID` in `.env`
 keeps one). Links (`aquarius urls`): Mission `http://<host>:3000/d/aquarius-mission?var-stream_url=http://<host>:8090`,
 Kafka UI `http://<host>:8084`. Details, tables and test tools: `docker/README.md` → "Data pipeline".
+
+### Telemetry stack — `path`
+
+Two stacks can feed Grafana. Run one at a time to compare them, or both together:
+
+| | `mqtt` | `kafka` |
+| :--- | :--- | :--- |
+| from PX4 | MAVLink (3rd link, 14740+i) | uXRCE-DDS → ROS 2 `/fmu/out` |
+| through | `mavlink_mqtt.py` → Mosquitto → Telegraf | `aquarius_bridge` → Kafka → ingestion |
+| dashboard | Fleet telemetry | Mission monitor |
+
+```bash
+aquarius path              # show TELEMETRY_PATH (default both)
+aquarius path mqtt         # MQTT stack only: Kafka stack removed, PX4's uXRCE client + XRCE agent off
+aquarius path kafka        # Kafka stack only: no MAVLink telemetry link, mosquitto / telegraf stopped
+aquarius path both         # both at once
+```
+
+Each call saves `TELEMETRY_PATH` (and `COMPOSE_PROFILES`: pipeline on for `kafka` / `both`) in `.env` and **restarts
+px4-sim + telemetry** — don't switch mid-flight. Compare them in Grafana **Path compare**
+(`http://<host>:3000/d/aquarius-compare`: rows/s, latency bridge → database p50 / p95 / p99, gaps, storage) and with
+`docker/bench_paths.sh` (runs mqtt → kafka → both, CPU / RAM per container and per telemetry process, RTF →
+`bench_paths.csv`). `XRCE=1` in `.env` keeps ROS 2 `/fmu/out` in `mqtt` mode. Details: `docker/README.md` →
+"Comparing the two telemetry stacks".
 
 ---
 

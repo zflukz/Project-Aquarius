@@ -54,6 +54,8 @@ below: `aquarius init`, `drones N`, `pipeline up`, `start mission …`, `status`
 - **Profile `pipeline`:** the Gazebo drones' ROS 2 topics → Kafka → TimescaleDB → Grafana **Mission monitor**
   (missions, search grid, coverage %, detections, survivor pins, camera of every drone). Same database, one Grafana.
 - Commands (arm, mission, offboard) never go through MQTT or Kafka — only direct MAVLink.
+- **Pick / compare the two stacks:** `aquarius path mqtt|kafka|both` (`TELEMETRY_PATH`, below "Comparing the two
+  telemetry stacks").
 
 ---
 
@@ -205,6 +207,7 @@ Bandwidth at 10 drones: telemetry ~30 KB/s; images 2 fps × 30–165 KB ≈ 0.6�
   battery, GPS, sensors, events, roll / pitch. Telegraf turns MQTT `aquarius/<fleet>/drone/<i>/<stream>` into one
   hypertable per stream (1-day chunks, `TSDB_RETENTION`).
 - **Mission monitor** (`mission.json`, uid `aquarius-mission`): see the pipeline section.
+- **Path compare** (`compare.json`, uid `aquarius-compare`): MQTT stack vs Kafka stack, see below.
 - Datasource `TimescaleDB` (uid `aquarius-tsdb`) for both. Edit Fleet in the UI → Export JSON into
   `grafana/dashboards/aquarius.json`; Mission in `build_dashboards.py`. Then rebuild `aquarius-grafana`.
 - Raw: `docker exec mosquitto mosquitto_sub -t 'aquarius/#' -v`, `docker exec -it timescaledb psql -U aquarius aquarius`
@@ -279,6 +282,34 @@ apply to empty volumes only.
 
 **drone-control** — idles; `docker compose exec` runs scripts; `DRONE_ID` → `udpin://0.0.0.0:14540+i`, `MAVLINK_URL`
 overrides; `AUTO_RUN` runs once at start.
+
+## Comparing the two telemetry stacks — `aquarius path`, `bench_paths.sh`
+
+| `TELEMETRY_PATH` | px4-sim | telemetry | services | Grafana |
+| :--- | :--- | :--- | :--- | :--- |
+| `mqtt` | MAVLink link 14740+i, **uXRCE client stopped** | `mavlink_mqtt.py`, no XRCE agent, no Kafka bridge | mosquitto, telegraf; pipeline removed | Fleet |
+| `kafka` | **no MAVLink telemetry link** | XRCE agent + `aquarius_bridge`, no MQTT bridge | pipeline (kafka, ingestion, …); mosquitto / telegraf stopped | Mission |
+| `both` (default) | both | both | all | both |
+
+Gazebo bridge, ground truth and the camera view (8083) run in every mode. `XRCE=1` keeps the uXRCE-DDS client +
+agent with `mqtt` (ROS 2 `/fmu/out`, bags). `aquarius path <p>` saves `TELEMETRY_PATH` + `COMPOSE_PROFILES` (pipeline
+on for `kafka` / `both`, off for `mqtt`), starts / stops the stacks, adds `received_at` to old Telegraf tables and
+recreates px4-sim + telemetry (flights in progress are lost). `aquarius path` alone shows the current mode.
+
+**Same measure on both** (same machine clock): sent = bridge sends (MQTT payload `t` / Kafka message CreateTime) →
+`received_at` = row written (`clock_timestamp()`; Telegraf tables via `create_templates`, pipeline `telemetry` via
+migration 0008 + new column `sent_at`). Latency includes broker + writer batching (Telegraf `flush_interval` 1 s,
+ingestion `BATCH_MAX_WAIT_S` 1 s), not the PX4 → bridge hop. The Kafka bridge's 10 Hz timer runs on **sim time** →
+fewer rows/s when RTF < 1; MQTT's 10 Hz is PX4's wall-clock stream.
+
+- Grafana **Path compare** (`compare.json`, uid `aquarius-compare`): summary table per stack (rows/s per drone, latency
+  p50 / p95 / p99 / max, longest gap, age), latency p50 / p95 over time, rows/s, gaps, storage per hypertable.
+  MQTT = table `position` (10 Hz), Kafka = `telemetry` (10 Hz, position + attitude + battery + mode in one row).
+- **`./bench_paths.sh [mqtt kafka both]`** (env `WARMUP=60 DURATION=60`, `NO_SWITCH=1` = measure what runs): for each
+  path runs `aquarius path`, waits, then averages `docker stats` per container, CPU / RSS per process inside
+  telemetry (XRCE agent, MQTT bridge, Kafka bridge, gz bridge, …), Gazebo RTF and the database numbers above →
+  table + `bench_paths.csv`. Fly during the window for numbers under load (`aquarius start coverage --detach`).
+  VM: copy `bench_paths.sh` next to `aquarius` (update does not download it).
 
 ## Performance test — `bench_sim.sh`
 

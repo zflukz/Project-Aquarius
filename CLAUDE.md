@@ -20,6 +20,68 @@ a separate computer, later real drones.
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |
 | `Robomaster-TT/`, `InfoData/` | side experiments / Obsidian notes |
 
+## Project phases (roadmap, 2026-11-13)
+
+Concept: user picks the search area → **central planner** splits it into one coverage path per drone (MCPP) → drones fly
+→ camera images → AI (YOLO) finds people → geo-localization → pins on the dashboard → central **re-plans** when the
+fleet changes. AI + image processing (P6, P7) are done by other team members; this repo provides their inputs / outputs.
+
+Status confirmed by the user 2026-11-14 (P6 / P7 = other team, not asked).
+✅ done · 🟡 partial · ⬜ not started · 👥 other team. Team data-plan phase names in brackets (A schemas, B pipeline,
+C database, D dashboard, E survivors / post-mission, F evaluation); M = `communication_plan.md`, T / C = `telemetry_plan.md`.
+
+| Phase | Work | Owner | Status | Done / missing |
+| :--- | :--- | :--- | :--- | :--- |
+| P0 Simulation | PX4 SITL ×N + Gazebo Baylands in Docker, QGC / noVNC, camera model | us | ✅ | done with Gazebo (user) |
+| P1 Infra / deploy | compose local / server / control, GHCR images, `aquarius` CLI, VM pull, split mode | us | 🟡 | running on the VM server but an **old version** → push current images + `aquarius update` on the VM |
+| P2 Area input | user picks the search area | us | 🟡 | done on branch **`FEAT-WEB-DASHBOARD`** (web dashboard, not merged into `feature-Network-flukez`); this branch: CLI rectangle `LAT,LON --size WxH` only; DB `search_area` not created for real flights |
+| P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ❓ | user not sure; code: `mcpp_mission.py` 1-drone flight PASSED, `--plan-only` 1–4 drones; `NUM_DRONES=2` flight not tested; planned paths not written to `flight_paths` |
+| P4 Telemetry + data pipeline | MAVLink → MQTT → Telegraf, ROS 2 → Kafka → ingestion → TimescaleDB + PostGIS (A, B, C; M1, M2; T2, T5) | us + data team | 🟡 | built, **not tested by the user** (Claude's local tests only, VM not tested) |
+| P5 Dashboard | Grafana Fleet, Mission monitor, Path compare (D) | us + data team | ✅ | Grafana runs (user); gap: coverage % / planned path empty for real flights until P2 / P3 write `search_area` / `flight_paths` |
+| P6 AI detection | YOLO on Kafka `image-frames` → Kafka `detections` | 👥 | ⬜ | not in this repo; contract `Data-Pipeline/schemas/detections.schema.json` |
+| P7 Geo-localization | detection + drone pose + camera model → lat/lon → Kafka `survivors` | 👥 | ⬜ | not in this repo; contract `survivors.schema.json`; receiving side done (ingestion → `persons` merge C5 → pins) |
+| P8 People in the sim | person models in the Gazebo world + `ground_truth_persons` (F3) | ? | ⬜ | needed to test P6 / P7 (Baylands has no people) |
+| P9 Re-planning | central re-plan when the fleet changes, see below | us | ⬜ | `replanning-events` schema / topic / table exist, nothing sends them |
+| P10 Evaluation | post-mission summary (E4), benchmarks: coverage, time, detection accuracy (F4); `bench_sim.sh` / `bench_paths.sh` on the VM | ? | ⬜ | not started (user); tools exist (`bench_sim.sh`, `bench_paths.sh`, `pipeline_stats.py`) |
+| P11 Security + network | MQTT auth / ACL, Grafana login, VPN / TLS (M4); DDS across machines (T3) | us | ⬜ | |
+| P12 Real drones | `mavlink-router`, companion computer, `FLEET=real` (M5) | us | ⬜ | |
+
+### P9 Re-planning — design (decided by the user 2026-11-14, not implemented)
+
+Today: plan once → upload the whole mission to PX4 over MAVLink → PX4 flies alone; nothing reacts to a drone leaving.
+
+- **Mission manager** on the **control computer** (decided; may move to the VM later): a long-running central process
+  (grows out of `mcpp_mission.py`) with one MAVSDK connection per drone for the whole mission.
+- **State**: the area's cell grid; a cell is covered once its drone passed those waypoints (`mission_progress`).
+  Read live over MAVLink; DB / Kafka only for logging and the dashboard.
+- **Triggers — all five (decided):**
+  1. **Low battery** — battery only *just enough to get back to base*: trigger when
+     `remaining % ≤ needed_home % + reserve %`, `needed_home % = (distance to home / speed + landing time) × drain rate`
+     (drain rate measured live from the battery stream, % per s); reserve configurable (start ~10 %). Drone → RTL,
+     its uncovered cells go to the others. PX4's own low-battery failsafe (`BAT_LOW_THR`, `COM_LOW_BAT_ACT`) stays as
+     the safety net and must trigger *later* than ours.
+  2. **Drone lost** — no heartbeat for N s or PX4 failsafe → its cells go to the others.
+  3. **Finished early** — a drone done before the rest takes cells from the drone with the most left.
+  4. **Area changed / drone added** by the user → re-plan everything still uncovered.
+  5. **Survivor found** (needs P7) → nearest drone flies there to confirm, then the rest is re-split.
+- **Action**: uncovered cells → MCPP partition again with the active drones' current positions as seeds → new missions
+  uploaded over **MAVLink** only to drones whose path changed (PX4 in-flight mission upload — verify behaviour) →
+  Kafka `replanning-events` → `flight_paths` planned `version + 1`.
+- **Commands never over MQTT / Kafka** (`communication_plan.md` R6); brokers only report.
+- **Control computer needs from the VM**: Kafka 9092 reachable (`KAFKA_ADVERTISED_HOST=<VM_IP>`, firewall) to send
+  `replanning-events`. The DB listens on 127.0.0.1 only → the manager cannot write `flight_paths` directly: either a
+  Kafka topic for planned paths (ingestion writes them — new schema, data team) or an SSH tunnel. **Open.**
+- **Schema v2 draft for `replanning-events`** — *not agreed; the user will discuss it with the data team*:
+  `event_type` adds `low_battery` (today `rtl_triggered`), `drone_lost`, `finished_early`, `area_changed`,
+  `drone_added`, `survivor_confirm`; optional fields `reason` (text), `area_id`, `plan_version`. Until agreed, use v1
+  only (`rtl_triggered` / `reassigned` / `mission_complete`).
+- **Before building P9 (next steps, agreed 2026-11-14):**
+  1. Read P2 on branch `FEAT-WEB-DASHBOARD` (`git show FEAT-WEB-DASHBOARD:<file>`, don't switch branches with
+     uncommitted work): area format (rectangle / polygon), how the area reaches the planner — the manager re-splits it.
+  2. Test a **2-drone MCPP flight** (closes P3's ❓): `aquarius drones 2` → `aquarius start coverage --size 40x30
+     --drones 2` → both drones fly their own part, RTL, `MISSION DONE`; check QGC shows both missions and Grafana both
+     tracks. Record the result in the P3 row.
+
 ## Conventions
 
 - Docker / simulator files go in `docker/`, nowhere else. Compose files are `docker/compose.*.yml`;
@@ -30,6 +92,8 @@ a separate computer, later real drones.
   different native API — don't "fix" imports to `mavsdk`.
 - Scripts pick the drone via env: `DRONE_ID` (→ `udpin://0.0.0.0:14540+DRONE_ID`) or `MAVLINK_URL`.
 - Don't commit without being asked. Branch: `feature-Network-flukez`, main branch: `main`.
+- **Every change or decision goes into this file** (user, 2026-11-14): code / config changes → a dated change log
+  entry; design decisions or status changes → update "Project phases" (status table, P9 design).
 
 ## Architecture (Docker)
 

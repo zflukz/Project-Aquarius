@@ -47,6 +47,8 @@ services:
       - CAMERA_RATE=${CAMERA_RATE-10}
       - VNC_LISTEN=127.0.0.1                # VNC only reachable through noVNC
       - TELEM=${TELEM:-1}                   # 3rd MAVLink link 14740+i -> 127.0.0.1:14700 (telemetry -> MQTT)
+      - TELEMETRY_PATH=${TELEMETRY_PATH:-both}   # mqtt | kafka | both (kafka = no MQTT link; aquarius path)
+      - XRCE=${XRCE:-}                      # 1 = keep uXRCE-DDS (ROS 2 /fmu/out) with TELEMETRY_PATH=mqtt
     volumes:
       - gz-fuel-cache:/root/.gz/fuel
     stop_grace_period: 10s
@@ -87,6 +89,8 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - GZ_CAMERA=${GZ_CAMERA-}             # camera "<link>/<sensor>", empty = from PX4_SIM_MODEL, none = off
       - WEB_VIDEO_PORT=${WEB_VIDEO_PORT:-8083}
+      - TELEMETRY_PATH=${TELEMETRY_PATH:-both}   # mqtt | kafka | both: which stack feeds Grafana (aquarius path)
+      - XRCE=${XRCE:-}                      # 1 = keep uXRCE-DDS (ROS 2 /fmu/out) with TELEMETRY_PATH=mqtt
       - MQTT_URL=${MQTT_URL-mqtt://127.0.0.1:1883}   # MAVLink -> MQTT for Grafana, empty = off
       - FLEET=${FLEET:-sim}
       - GT_RATE=${GT_RATE-30}                # ground truth Hz (/uav_i/gz/ground_truth), empty = off
@@ -329,6 +333,8 @@ configs:
         # new stream -> table + hypertable / index / retention (aquarius_hypertable from timescaledb_init)
         create_templates = [
           '''CREATE TABLE {{ .table }} ({{ .columns }})''',
+          # insert time for the path comparison (Grafana "Path compare": latency = received_at - time)
+          '''ALTER TABLE {{ .table }} ADD COLUMN received_at timestamptz DEFAULT clock_timestamp()''',
           '''SELECT aquarius_hypertable({{ .table|quoteLiteral }}, '$${TSDB_RETENTION}')''',
         ]
   timescaledb_init:

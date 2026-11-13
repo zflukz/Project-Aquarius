@@ -17,6 +17,8 @@
 #   HEADLESS (1 = no GUI)  PX4_DIR=~/PX4-Autopilot  LOG_DIR=/tmp/px4-native
 #   GZ_PARTITION=aquarius  ROS_DOMAIN_ID=0  PX4_VIDEO_HOST_IP=127.0.0.1   (as in the compose files)
 #   TELEM (0 = no telemetry link)  TELEM_HOST=127.0.0.1
+#   TELEMETRY_PATH=both (mqtt | kafka | both: kafka = no telemetry link, mqtt = uXRCE-DDS client stopped
+#                  unless XRCE=1) — same in run_telemetry_native.sh
 #   CAMERA_WIDTH=640 CAMERA_HEIGHT=480 CAMERA_RATE=10  camera models (edits $PX4_DIR models, original kept as
 #                                                     model.sdf.orig); empty = model default (needs a GPU)
 #
@@ -41,6 +43,8 @@ DRONE_SPACING=${DRONE_SPACING:-3}
 API_LOCAL_BASE=14640; API_REMOTE_BASE=14540
 GCS_LOCAL_BASE=18640; GCS_REMOTE_PORT=14550
 TELEM_LOCAL_BASE=14740; TELEM_PORT=14700; TELEM_HOST=${TELEM_HOST:-127.0.0.1}
+export TELEMETRY_PATH=${TELEMETRY_PATH:-both}
+case "$TELEMETRY_PATH" in mqtt|kafka|both) ;; *) echo "TELEMETRY_PATH must be mqtt, kafka or both"; exit 1 ;; esac
 
 [ -x "$BIN/px4" ] || { echo "PX4 not built: $BIN/px4 — run scripts/install_sim_server.sh"; exit 1; }
 if [ -z "$HEADLESS" ] && [ -z "$DISPLAY" ]; then
@@ -127,7 +131,14 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
             -u $((GCS_LOCAL_BASE + i)) -t "$CONTROL_IP" -o $GCS_REMOTE_PORT
         echo "drone$i (sysid $((i + 1))) -> $CONTROL_IP:$((API_REMOTE_BASE + i)) [MAVSDK], :$GCS_REMOTE_PORT [QGC]"
     fi
-    if [ "$TELEM" != "0" ]; then   # dashboard link, all drones -> one port
+    if [ "$TELEMETRY_PATH" = mqtt ] && [ "$XRCE" != 1 ]; then   # MQTT stack only: no uORB -> DDS
+        if "$BIN/px4-uxrce_dds_client" --instance "$i" stop > /dev/null 2>&1; then
+            echo "drone$i uXRCE-DDS client stopped (TELEMETRY_PATH=mqtt)"
+        else
+            echo "WARN: drone$i uXRCE-DDS client not stopped"
+        fi
+    fi
+    if [ "$TELEM" != "0" ] && [ "$TELEMETRY_PATH" != kafka ]; then   # dashboard link, all drones -> one port
         # max 6 MAVLink instances -> free PX4's unused onboard-payload link (14280+i), as in entrypoint.sh
         "$BIN/px4-mavlink" --instance "$i" stop -u $((14280 + i)) > /dev/null 2>&1 || true
         sleep 1

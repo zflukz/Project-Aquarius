@@ -1,0 +1,575 @@
+{
+  "uid": "aquarius-compare",
+  "title": "Aquarius - Path compare (MQTT vs Kafka)",
+  "tags": [
+    "aquarius",
+    "benchmark"
+  ],
+  "description": "MQTT stack vs Kafka stack: latency, rate, gaps, storage. aquarius path mqtt|kafka|both",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "version": 1,
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "2s",
+      "5s",
+      "10s",
+      "30s",
+      "1m"
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**MQTT stack**: PX4 MAVLink → `mavlink_mqtt.py` → Mosquitto → Telegraf → table `position` (10 Hz).  **Kafka stack**: PX4 uXRCE-DDS → ROS 2 → `aquarius_bridge` → Kafka → ingestion → table `telemetry` (10 Hz *sim time*, so fewer rows/s when RTF < 1).  \n**Latency** = row written (`received_at`, `clock_timestamp()`) − bridge sent it (MQTT: payload `t`, Kafka: message CreateTime). Both clocks are on the same machine. It includes broker + writer batching (Telegraf `flush_interval` 1 s, ingestion `BATCH_MAX_WAIT_S` 1 s). PX4 → bridge is *not* included.  \nPick a stack: `aquarius path mqtt|kafka|both`. CPU / RAM per container and process: `docker/bench_paths.sh`. Rows from before migration 0008 / `aquarius path` are left out (no send time)."
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Summary (time range)",
+      "description": "One row per stack over the selected time range. rows/s is per drone. max gap = longest time between two rows of the same drone (dropouts). age = time since the newest row.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "WITH s AS (\n  SELECT 'MQTT' AS path, drone AS drone, time AS sent, received_at\n    FROM \"position\"\n   WHERE $__timeFilter(received_at) AND time > $__timeFrom()::timestamptz - interval '1 minute'  -- chunk exclusion\n  UNION ALL\n  SELECT 'Kafka', drone_id, sent_at, received_at\n    FROM telemetry WHERE $__timeFilter(received_at) AND sent_at IS NOT NULL\n), g AS (\n  SELECT *, EXTRACT(epoch FROM received_at - lag(received_at) OVER (PARTITION BY path, drone ORDER BY received_at)) * 1000 AS gap\n    FROM s\n)\nSELECT path AS \"stack\",\n       count(DISTINCT drone) AS \"drones\",\n       count(*) AS \"rows\",\n       count(*) / NULLIF(EXTRACT(epoch FROM max(received_at) - min(received_at)), 0) / count(DISTINCT drone) AS \"rows/s per drone\",\n       percentile_cont(0.50) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM received_at - sent) * 1000) AS \"latency p50\",\n       percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM received_at - sent) * 1000) AS \"latency p95\",\n       percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM received_at - sent) * 1000) AS \"latency p99\",\n       max(EXTRACT(epoch FROM received_at - sent) * 1000) AS \"latency max\",\n       max(gap) AS \"max gap\",\n       EXTRACT(epoch FROM now() - max(received_at)) AS \"age\"\n  FROM g GROUP BY path ORDER BY path DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "latency.*|max gap"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "drones|rows"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rows/s per drone"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stack"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "MQTT": {
+                        "color": "#3987e5",
+                        "index": 0
+                      },
+                      "Kafka": {
+                        "color": "#d95926",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Latency: bridge → database",
+      "description": "p50 (solid) and p95 (dashed) per time bucket, all drones.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "WITH s AS (\n  SELECT 'MQTT' AS path, drone AS drone, time AS sent, received_at\n    FROM \"position\"\n   WHERE $__timeFilter(received_at) AND time > $__timeFrom()::timestamptz - interval '1 minute'  -- chunk exclusion\n  UNION ALL\n  SELECT 'Kafka', drone_id, sent_at, received_at\n    FROM telemetry WHERE $__timeFilter(received_at) AND sent_at IS NOT NULL\n)\nSELECT $__timeGroupAlias(received_at, $__interval), path,\n       percentile_cont(0.50) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM received_at - sent) * 1000) AS p50,\n       percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM received_at - sent) * 1000) AS p95\n  FROM s GROUP BY 1, path ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "displayName": "${__field.labels.path} ${__field.name}",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 5000,
+            "axisBorderShow": false,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*MQTT.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*Kafka.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*p95"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    6
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Rows / s per drone",
+      "description": "Rows written per second per drone (by insert time). Configured: 10 / s on both; Kafka's is sim time.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "WITH s AS (\n  SELECT 'MQTT' AS path, drone AS drone, time AS sent, received_at\n    FROM \"position\"\n   WHERE $__timeFilter(received_at) AND time > $__timeFrom()::timestamptz - interval '1 minute'  -- chunk exclusion\n  UNION ALL\n  SELECT 'Kafka', drone_id, sent_at, received_at\n    FROM telemetry WHERE $__timeFilter(received_at) AND sent_at IS NOT NULL\n)\nSELECT $__timeGroupAlias(received_at, $__interval), path,\n       count(*) / ($__interval_ms / 1000.0) / count(DISTINCT drone) AS \"rows/s\"\n  FROM s GROUP BY 1, path ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "displayName": "${__field.labels.path} ${__field.name}",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 5000,
+            "axisBorderShow": false,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*MQTT.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*Kafka.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Longest gap between rows",
+      "description": "Max time between two consecutive rows of one drone per bucket. 100 ms = steady 10 Hz; spikes = dropouts or batching.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "WITH s AS (\n  SELECT 'MQTT' AS path, drone AS drone, time AS sent, received_at\n    FROM \"position\"\n   WHERE $__timeFilter(received_at) AND time > $__timeFrom()::timestamptz - interval '1 minute'  -- chunk exclusion\n  UNION ALL\n  SELECT 'Kafka', drone_id, sent_at, received_at\n    FROM telemetry WHERE $__timeFilter(received_at) AND sent_at IS NOT NULL\n), g AS (\n  SELECT path, received_at,\n         EXTRACT(epoch FROM received_at - lag(received_at) OVER (PARTITION BY path, drone ORDER BY received_at)) * 1000 AS gap\n    FROM s\n)\nSELECT $__timeGroupAlias(received_at, $__interval), path, max(gap) AS \"max gap\"\n  FROM g WHERE gap IS NOT NULL GROUP BY 1, path ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "displayName": "${__field.labels.path} ${__field.name}",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 5000,
+            "axisBorderShow": false,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*MQTT.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*Kafka.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Storage per table",
+      "description": "Disk used by each hypertable (incl. indexes). The MQTT stack writes one table per stream; the Kafka stack one telemetry row with position + attitude + battery + mode.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "SELECT CASE WHEN h.hypertable_name IN ('telemetry', 'detections', 'survivors', 'replanning_events')\n                 THEN 'Kafka' ELSE 'MQTT' END AS \"stack\",\n       h.hypertable_name AS \"table\",\n       approximate_row_count(format('%I.%I', h.hypertable_schema, h.hypertable_name)::regclass) AS \"rows (approx.)\",\n       hypertable_size(format('%I.%I', h.hypertable_schema, h.hypertable_name)::regclass) AS \"size\",\n       hypertable_size(format('%I.%I', h.hypertable_schema, h.hypertable_name)::regclass)\n         / NULLIF(approximate_row_count(format('%I.%I', h.hypertable_schema, h.hypertable_name)::regclass), 0) AS \"bytes / row\"\n  FROM timescaledb_information.hypertables h\n WHERE h.hypertable_schema = 'public'\n   AND (h.hypertable_name IN ('telemetry', 'detections', 'survivors', 'replanning_events')\n        OR EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public'\n                   AND c.table_name = h.hypertable_name AND c.column_name = 'fleet'))\n ORDER BY 1 DESC, 4 DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "size"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes / row"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stack"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "MQTT": {
+                        "color": "#3987e5",
+                        "index": 0
+                      },
+                      "Kafka": {
+                        "color": "#d95926",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    }
+  ]
+}

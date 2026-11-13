@@ -19,6 +19,9 @@
 #   PX4_GZ_FOLLOW_OFFSET_X/Y/Z  camera offset from that drone, m (ENU world frame)
 #   TELEM            0 = no telemetry link; else PX4 sends 14740+i -> TELEM_HOST:14700 (mavlink_mqtt.py)
 #   TELEM_HOST       where mavlink_mqtt.py runs (default 127.0.0.1 = telemetry container next to us)
+#   TELEMETRY_PATH   mqtt | kafka | both (default) — which telemetry stack runs (aquarius path):
+#                    kafka = no MAVLink telemetry link, mqtt = PX4's uXRCE-DDS client stopped (unless XRCE=1)
+#   XRCE             1 = keep the uXRCE-DDS client with TELEMETRY_PATH=mqtt (ROS 2 topics / ros2 bag)
 #   CAMERA_WIDTH/HEIGHT/RATE    drone camera models (mono_cam, gimbal, OakD-Lite RGB), default 640x480 @ 10 Hz;
 #                               empty = model default (1280x960 @ 30 -> RTF ~0.03 with software rendering)
 set -e
@@ -34,6 +37,11 @@ TELEM_LOCAL_BASE=14740 # telemetry link (dashboard), PX4 listens here (drone i -
 TELEM_PORT=14700       # mavlink_mqtt.py listens here, shared by all drones
 TELEM_HOST=${TELEM_HOST:-127.0.0.1}
 GZ_FOLLOW=${GZ_FOLLOW-0}   # unset -> follow drone 0, set empty -> free camera
+TELEMETRY_PATH=${TELEMETRY_PATH:-both}
+case "$TELEMETRY_PATH" in
+    mqtt|kafka|both) ;;
+    *) echo "WARN: TELEMETRY_PATH=$TELEMETRY_PATH (mqtt | kafka | both) -> both"; TELEMETRY_PATH=both ;;
+esac
 
 mkdir -p "$LOG_DIR"
 cd /px4
@@ -182,7 +190,15 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
             -u $((GCS_LOCAL_BASE + i)) -t "$CONTROL_IP" -o $GCS_REMOTE_PORT
         echo "drone$i (sysid $((i + 1))) -> $CONTROL_IP:$((API_REMOTE_BASE + i)) [MAVSDK], :$GCS_REMOTE_PORT [QGC]"
     fi
-    if [ "$TELEM" != "0" ]; then
+    if [ "$TELEMETRY_PATH" = mqtt ] && [ "$XRCE" != 1 ]; then
+        # MQTT stack only: no uORB -> DDS work in PX4 (nothing would receive it, telemetry runs no agent)
+        if "$BIN/px4-uxrce_dds_client" --instance "$i" stop > /dev/null 2>&1; then
+            echo "drone$i uXRCE-DDS client stopped (TELEMETRY_PATH=mqtt)"
+        else
+            echo "WARN: drone$i uXRCE-DDS client not stopped"
+        fi
+    fi
+    if [ "$TELEM" != "0" ] && [ "$TELEMETRY_PATH" != kafka ]; then
         # telemetry link for the dashboard: VM:14740+i -> TELEM_HOST:14700, all drones to one port
         # (telemetry container's mavlink_mqtt.py tells them apart by sysid). PX4 allows 6 MAVLink
         # instances: 4 from px4-rc.mavlink + our 2 above -> free the onboard-payload link

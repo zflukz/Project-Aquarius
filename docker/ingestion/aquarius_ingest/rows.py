@@ -16,8 +16,8 @@ JSON_TOPICS = ("telemetry", "detections", "survivors", "replanning-events")
 SQL = {
     "telemetry": """
         INSERT INTO telemetry (ts, drone_id, mission_id, lat, lon, alt_amsl, alt_rel, q, vel_ned,
-                               battery_remaining, battery_voltage, nav_state, armed)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                               battery_remaining, battery_voltage, nav_state, armed, sent_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING""",
     "detections": """
         INSERT INTO detections (ts, drone_id, frame_id, model_version, image_w, image_h, objects)
@@ -57,6 +57,14 @@ UUID_FIELDS = ("mission_id", "detection_id", "event_id")
 REJECT_SQL = """
     INSERT INTO ingest_rejects (topic, kafka_part, kafka_offset, reason, payload)
     VALUES (%s, %s, %s, %s, %s)"""
+
+
+def kafka_sent_at(timestamp: Tuple[int, int]) -> Optional[datetime]:
+    """confluent_kafka Message.timestamp() -> datetime, None if the message has no timestamp."""
+    kind, ms = timestamp
+    if kind == 0 or ms is None or ms < 0:   # 0 = TIMESTAMP_NOT_AVAILABLE
+        return None
+    return EPOCH + timedelta(milliseconds=ms)
 
 
 def ts_from_us(ts_us: int) -> datetime:
@@ -113,12 +121,13 @@ def decode(topic: str, value: Optional[bytes], validators) -> Dict[str, Any]:
     return msg
 
 
-def to_row(topic: str, m: Dict[str, Any]) -> Tuple:
+def to_row(topic: str, m: Dict[str, Any], sent_at: Optional[datetime] = None) -> Tuple:
+    """sent_at: when the bridge sent it (Kafka CreateTime, wall clock) -> telemetry.sent_at (0008)."""
     ts = ts_from_us(m["ts_us"])
     if topic == "telemetry":
         return (ts, m["drone_id"], m["mission_id"], m["lat"], m["lon"], m["alt_amsl"], m["alt_rel"],
                 m["q"], m["vel_ned"], m["battery_remaining"], m["battery_voltage"],
-                m["nav_state"], m["armed"])
+                m["nav_state"], m["armed"], sent_at)
     if topic == "detections":
         return (ts, m["drone_id"], m["frame_id"], m["model_version"], m["image_w"], m["image_h"],
                 json.dumps(m["objects"], separators=(",", ":")))

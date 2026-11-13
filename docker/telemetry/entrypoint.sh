@@ -24,6 +24,11 @@
 #   XRCE_PORT=8888  WEB_VIDEO_PORT=8083 (empty = off)
 #   MQTT_URL=mqtt://127.0.0.1:1883 (empty = no MQTT bridge)  MAVLINK_IN=udpin:0.0.0.0:14700  FLEET=sim
 #   RECORD (1 = record a bag)  RECORD_REGEX (topics)  DATA_DIR=/data
+#   TELEMETRY_PATH=both   which stack feeds Grafana (aquarius path), same value as px4-sim:
+#                    mqtt  = 4 only (no XRCE agent, no Kafka bridge; PX4's uXRCE client is stopped)
+#                    kafka = 1 + 6 only (no MQTT bridge; px4-sim opens no MAVLink telemetry link)
+#                    both  = 1 + 4 + 6.   Gazebo bridge, ground truth, camera view run in every mode.
+#   XRCE=1           keep the XRCE agent with TELEMETRY_PATH=mqtt (ROS 2 /fmu/out topics, ros2 bag)
 #   GT_RATE=30 (Hz, ground truth; empty = off)
 #   KAFKA_BOOTSTRAP (host:port, empty = no Kafka bridge)  MISSION_ID (empty = new UUID)  BRIDGE_IMAGE_FPS=2
 #   ROS_SETUP PX4_MSGS_SETUP XRCE_LIB_DIR GT_SCRIPT MQTT_SCRIPT AQ_BRIDGE_SETUP   paths (native installs)
@@ -51,6 +56,14 @@ BRIDGE_CONFIG=${BRIDGE_CONFIG:-/tmp/gz_bridge.yaml}
 GT_SCRIPT=${GT_SCRIPT:-/ground_truth.py}
 MQTT_SCRIPT=${MQTT_SCRIPT:-/mavlink_mqtt.py}
 export GT_RATE=${GT_RATE-30}
+TELEMETRY_PATH=${TELEMETRY_PATH:-both}
+case "$TELEMETRY_PATH" in
+    mqtt|kafka|both) ;;
+    *) echo "WARN: TELEMETRY_PATH=$TELEMETRY_PATH (mqtt | kafka | both) -> both"; TELEMETRY_PATH=both ;;
+esac
+[ "$TELEMETRY_PATH" = kafka ] && MQTT_URL=
+[ "$TELEMETRY_PATH" = mqtt ]  && KAFKA_BOOTSTRAP=
+XRCE_ON=1; [ "$TELEMETRY_PATH" = mqtt ] && [ "$XRCE" != 1 ] && XRCE_ON=
 KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP:-}
 AQ_BRIDGE_SETUP=${AQ_BRIDGE_SETUP:-/opt/aquarius_ws/install/setup.bash}
 AQ_BRIDGE_CONFIG=${AQ_BRIDGE_CONFIG:-/tmp/aquarius_bridge.yaml}
@@ -106,8 +119,10 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 # 1. uXRCE-DDS agent — own Fast-DDS in XRCE_LIB_DIR (same sonames as ROS's, so keep ROS's off the path)
-LD_LIBRARY_PATH="$XRCE_LIB_DIR" MicroXRCEAgent udp4 -p "$XRCE_PORT" > >(sed -u 's/^/[xrce] /') 2>&1 &
-PIDS+=($!)
+if [ -n "$XRCE_ON" ]; then
+    LD_LIBRARY_PATH="$XRCE_LIB_DIR" MicroXRCEAgent udp4 -p "$XRCE_PORT" > >(sed -u 's/^/[xrce] /') 2>&1 &
+    PIDS+=($!)
+fi
 
 source "$ROS_SETUP"
 # px4_msgs: lets ros2 bag / ros2 topic echo decode /fmu/out/*
@@ -201,7 +216,13 @@ elif [ -n "$KAFKA_BOOTSTRAP" ]; then
 fi
 
 echo "telemetry: $PX4_NUM_DRONES x ${MODEL} in '$PX4_GZ_WORLD' (GZ_PARTITION=$GZ_PARTITION, ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
-echo "  PX4 uORB  : /fmu/out/* (drone 0), /uav_<i>/fmu/out/* (drone i)   agent udp $XRCE_PORT"
+onoff() { if [ -n "$1" ]; then echo on; else echo off; fi; }
+echo "  path      : TELEMETRY_PATH=$TELEMETRY_PATH  (MQTT bridge $(onoff "$MQTT_URL"), Kafka bridge $(onoff "$KAFKA_BOOTSTRAP"), XRCE agent $(onoff "$XRCE_ON"))"
+if [ -n "$XRCE_ON" ]; then
+    echo "  PX4 uORB  : /fmu/out/* (drone 0), /uav_<i>/fmu/out/* (drone i)   agent udp $XRCE_PORT"
+else
+    echo "  PX4 uORB  : off (TELEMETRY_PATH=mqtt; XRCE=1 keeps the agent)"
+fi
 echo "  Gazebo    : /uav_<i>/gz/{imu,navsat,air_pressure,magnetometer,ground_truth}, /clock"
 if [ -n "$GZ_CAMERA" ]; then
     echo "  camera    : /uav_<i>/camera/image_raw  ($GZ_CAMERA)"

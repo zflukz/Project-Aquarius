@@ -32,7 +32,7 @@ import psycopg
 from confluent_kafka import Consumer, KafkaError
 
 from .rows import (DRONE_UPSERT_SQL, JSON_TOPICS, MERGE_SQL, MISSION_UPSERT_SQL, REJECT_SQL, SQL,
-                   Rejected, Seen, decode, load_validators, to_row)
+                   Rejected, Seen, decode, kafka_sent_at, load_validators, to_row)
 
 log = logging.getLogger("ingestion")
 
@@ -83,7 +83,7 @@ def run() -> int:
                     topic = m.topic()
                     try:
                         msg = decode(topic, m.value(), validators)
-                        rows[topic].append(to_row(topic, msg))
+                        rows[topic].append(to_row(topic, msg, kafka_sent_at(m.timestamp())))
                         seen.add(topic, msg)
                     except Rejected as e:
                         payload = (m.value() or b"")[:4000].decode("utf-8", "replace")

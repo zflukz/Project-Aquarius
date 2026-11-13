@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
 from aquarius_ingest.rows import (DRONE_UPSERT_SQL, MISSION_UPSERT_SQL, SQL, Rejected, Seen,  # noqa: E402
-                                  decode, load_validators, to_row, ts_from_us)
+                                  decode, kafka_sent_at, load_validators, to_row, ts_from_us)
 
 V = load_validators(os.path.join(HERE, "..", "..", "..", "Data-Pipeline", "schemas"))
 MISSION = str(uuid.uuid4())
@@ -116,6 +116,13 @@ class TestTime(unittest.TestCase):
         self.assertEqual(t.microsecond, 123_457)
         self.assertEqual(t.tzinfo, timezone.utc)
         self.assertEqual(t, datetime.fromtimestamp(1_791_000_000, tz=timezone.utc).replace(microsecond=123_457))
+
+    def test_kafka_sent_at(self):   # Message.timestamp() = (type, ms); type 0 = not available
+        self.assertEqual(kafka_sent_at((1, 1_791_000_000_250)),
+                         datetime.fromtimestamp(1_791_000_000, tz=timezone.utc).replace(microsecond=250_000))
+        self.assertIsNone(kafka_sent_at((0, -1)))
+        row = to_row("telemetry", telemetry(), kafka_sent_at((1, 1_791_000_000_250)))
+        self.assertEqual(row[-1].microsecond, 250_000)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@
 #                                        newest compose files + images, restart what changed (VM: pull only)
 #   aquarius pipeline [up|down|on|off]   data pipeline (Gazebo drones -> Kafka -> TimescaleDB -> Mission dashboard)
 #                                        up / down = start / stop now, on / off = also at every start (.env)
+#   aquarius path [mqtt|kafka|both]      which telemetry stack feeds Grafana (compare them: "Path compare"
+#                                        dashboard, docker/bench_paths.sh); restarts px4-sim + telemetry
 #   aquarius start mission LAT,LON [LAT,LON ...] [--drone N] [--alt M] [--speed V] [--max-dist M] [--detach]
 #   aquarius start coverage [LAT,LON] [--size WxH] [--drones N] [--sweep M] [--alt M] [--detach]
 #   aquarius status [--drone N]          containers + armed / mode / battery / position
@@ -347,6 +349,81 @@ cmd_pipeline() {   # up | down | on | off — compose profile `pipeline`
     esac
 }
 
+# Telegraf tables made before the path comparison existed: add the insert-time column (new tables get it
+# from Telegraf's create_templates). Idempotent. Pipeline table: migration 0008 (db-migrate).
+TELEGRAF_LATENCY_SQL=$(cat <<'SQL'
+DO $$
+DECLARE t record;
+BEGIN
+  FOR t IN SELECT tb.table_name FROM information_schema.tables tb
+            WHERE tb.table_schema = 'public' AND tb.table_type = 'BASE TABLE'
+              AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public'
+                          AND c.table_name = tb.table_name AND c.column_name = 'fleet')
+              AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public'
+                          AND c.table_name = tb.table_name AND c.column_name = 'drone')
+              AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public'
+                          AND c.table_name = tb.table_name AND c.column_name = 'received_at')
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ADD COLUMN received_at timestamptz', t.table_name);
+    EXECUTE format('ALTER TABLE public.%I ALTER COLUMN received_at SET DEFAULT clock_timestamp()', t.table_name);
+    RAISE NOTICE 'received_at added to %', t.table_name;
+  END LOOP;
+END $$;
+SQL
+)
+
+cmd_path() {   # mqtt | kafka | both — which telemetry stack runs (TELEMETRY_PATH in .env)
+    MODE=$(detect_mode)
+    [ "$MODE" = control ] && die "the telemetry stacks run on the VM (or locally) — run 'aquarius path' there"
+    local file; file=$(compose_file "$MODE")
+    [ -f "$DOCKER_DIR/.env" ] || die "no $DOCKER_DIR/.env — run 'aquarius init' first"
+    cd "$DOCKER_DIR"
+    local p=${ARGS[0]:-}
+    if [ -z "$p" ]; then
+        p=$(get_env TELEMETRY_PATH); p=${p:-both}
+        echo "TELEMETRY_PATH=$p"
+        echo "    mqtt : PX4 MAVLink -> mavlink_mqtt.py -> Mosquitto -> Telegraf -> TimescaleDB  (Fleet dashboard)"
+        echo "    kafka: PX4 uXRCE-DDS -> ROS 2 -> aquarius_bridge -> Kafka -> ingestion -> TimescaleDB  (Mission dashboard)"
+        echo "    both : both at once.   Compare: Grafana 'Path compare', docker/bench_paths.sh"
+        running telemetry && docker logs telemetry 2>&1 | grep -E '^ +path +:' | tail -n 1
+        return
+    fi
+    case "$p" in mqtt|kafka|both) ;; *) die "path: mqtt | kafka | both" ;; esac
+    set_env TELEMETRY_PATH "$p"
+    # the Kafka stack is compose profile `pipeline`: keep it on with the path so update / up -d agree
+    if [ "$p" = mqtt ]; then set_env COMPOSE_PROFILES ""; else set_env COMPOSE_PROFILES pipeline; fi
+    info "TELEMETRY_PATH=$p, COMPOSE_PROFILES=$(get_env COMPOSE_PROFILES) saved in .env"
+    running px4-sim || { echo "    sim not running — 'aquarius init $MODE' starts it with this path"; return; }
+
+    local dc=(docker compose -f "$file")
+    # shellcheck disable=SC2086
+    case "$p" in
+        mqtt)
+            info "stopping the Kafka stack"
+            "${dc[@]}" --profile pipeline rm -sf $PIPELINE_SERVICES
+            "${dc[@]}" up -d mosquitto telegraf ;;
+        kafka)
+            info "stopping the MQTT stack (mosquitto, telegraf)"
+            "${dc[@]}" stop mosquitto telegraf ;;
+        both)
+            "${dc[@]}" up -d mosquitto telegraf ;;
+    esac
+    if [ "$p" != mqtt ]; then
+        info "starting the Kafka stack"
+        if [ "$MODE" = local ]; then "${dc[@]}" --profile pipeline up -d ${BUILD:+--build} $PIPELINE_SERVICES
+        else "${dc[@]}" --profile pipeline pull -q $PIPELINE_SERVICES && "${dc[@]}" --profile pipeline up -d $PIPELINE_SERVICES; fi
+    fi
+    if running timescaledb; then
+        docker exec -i timescaledb psql -q -U aquarius -d aquarius -v ON_ERROR_STOP=1 <<< "$TELEGRAF_LATENCY_SQL" \
+            || echo "    WARN: could not add received_at to the Telegraf tables (MQTT latency panels stay empty)"
+    fi
+    # px4-sim opens / skips the MAVLink telemetry link and stops PX4's uXRCE client at start,
+    # telemetry starts its parts from TELEMETRY_PATH -> both restart (flights in progress are lost)
+    info "restarting px4-sim + telemetry with TELEMETRY_PATH=$p"
+    "${dc[@]}" up -d --force-recreate px4-sim telemetry
+    wait_ready
+}
+
 cmd_urls() {
     running px4-sim || return 0
     local h=localhost gz=8080
@@ -362,6 +439,7 @@ cmd_urls() {
     if running grafana; then
         # camera panel loads the MJPEG from the browser -> needs the VM address, not localhost
         echo "    Grafana     http://$h:3000/d/aquarius-fleet?var-cam=http://$h:8083"
+        echo "    Compare     http://$h:3000/d/aquarius-compare   (TELEMETRY_PATH=$(get_env TELEMETRY_PATH))"
     fi
     if running kafka; then
         echo "    Mission     http://$h:3000/d/aquarius-mission?var-stream_url=http://$h:8090"
@@ -392,6 +470,7 @@ cmd_start() {
 
 cmd_status() {
     docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|timescaledb|grafana|kafka|ingestion|imagestream" || true
+    running telemetry && echo "    TELEMETRY_PATH=$(docker exec telemetry printenv TELEMETRY_PATH 2>/dev/null || echo both)   (aquarius path)"
     for j in mission coverage; do
         local p; p=$(job_pid $j)
         [ -n "$p" ] && echo "    $j running for drone $DRONE (aquarius logs $j)"
@@ -442,6 +521,7 @@ case "$CMD" in
     drones)     cmd_drones ;;
     update)     cmd_update ;;
     pipeline)   cmd_pipeline ;;
+    path)       cmd_path ;;
     start)      cmd_start ;;
     status)     cmd_status ;;
     rtl|stop)   cmd_action rtl ;;

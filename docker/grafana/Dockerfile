@@ -4,7 +4,8 @@
 #                             edit in the UI, then Share -> Export -> JSON into this file
 #   dashboards/mission.json   Mission monitor (profile pipeline): Kafka -> ingestion -> TimescaleDB
 #                             generated: python3 docker/grafana/build_dashboards.py
-# Rebuild the image after changing either file.
+#   dashboards/compare.json   Path compare: MQTT stack vs Kafka stack (aquarius path, docker/bench_paths.sh)
+# Rebuild the image after changing any of them.
 ARG GRAFANA_VERSION=12.2.0
 FROM grafana/grafana:${GRAFANA_VERSION}
 
