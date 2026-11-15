@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 
-from aquarius_bridge.core import (ClockOffsetEstimator, DroneState, EpochMapper,  # noqa: E402
+from aquarius_bridge.core import (ClockOffsetEstimator, DroneState, EpochMapper, plausible_time,  # noqa: E402
                                   RateLimiter, build_telemetry, encode_json,
                                   image_headers, jpeg_dimensions, nav_state_name,
                                   parse_drone_specs, stamp_to_us)
@@ -73,6 +73,61 @@ class TestTime(unittest.TestCase):
         m.latch(wall_now_us=1_791_000_999_000_000, ros_now_us=13_000_000)  # ignored
         self.assertEqual(m.to_epoch_us(12_000_000), 1_791_000_000_000_000)
         self.assertEqual(m.to_epoch_us(12_100_000), 1_791_000_000_100_000)
+
+    def test_not_ready_before_min_samples(self):
+        est = ClockOffsetEstimator(min_samples=20)
+        for i in range(19):
+            est.observe(i * 10_000, i * 10_000 + 500)
+        self.assertFalse(est.ready)
+        est.observe(19 * 10_000, 19 * 10_000 + 500)
+        self.assertTrue(est.ready)
+
+    def test_clock_step_down_is_taken_at_once(self):
+        # PX4 time sync converges: timestamps jump from boot time to the agent's (wall) clock
+        est = ClockOffsetEstimator(min_samples=1)
+        for i in range(30):
+            est.observe(5_000_000 + i * 20_000, 5_000_000 + i * 20_000 + 300)          # boot clock
+        wall = 1_791_000_000_000_000
+        est.observe(wall, 5_700_000)                                                    # synced clock
+        self.assertEqual(est.to_ros_us(wall + 20_000), 5_720_000)
+        self.assertEqual(est.resets, 0)
+
+    def test_clock_step_up_resets_after_confirmation(self):
+        # PX4 rebooted: its timestamps start again near 0, d jumps UP and the old minimum would hide it
+        est = ClockOffsetEstimator(min_samples=1, jump_confirm=20)
+        for i in range(50):
+            est.observe(100_000_000 + i * 20_000, 100_000_000 + i * 20_000 + 300)    # d = 300
+        for i in range(19):
+            est.observe(i * 20_000, 101_000_000 + i * 20_000 + 400)                  # d ~ 101 s
+        self.assertEqual(est.offset_us, 300)                                         # not yet confirmed
+        est.observe(19 * 20_000, 101_000_000 + 19 * 20_000 + 400)
+        self.assertEqual(est.resets, 1)
+        self.assertEqual(est.offset_us, 101_000_400)
+
+    def test_stale_sample_after_step_is_not_plausible(self):
+        # the bug seen on the server: a sample still in the boot clock mapped with the new offset -> near 0
+        est = ClockOffsetEstimator(min_samples=1)
+        wall = 1_791_000_000_000_000
+        sim_now = 60_000_000
+        est.observe(wall, sim_now)                       # synced sample, offset = sim - wall
+        stale = est.to_ros_us(53_000_000)                # boot-clock timestamp from before the step
+        self.assertFalse(plausible_time(stale, sim_now))
+        self.assertTrue(plausible_time(est.to_ros_us(wall - 50_000), sim_now))
+
+    def test_plausible_window(self):
+        now = 100_000_000
+        self.assertTrue(plausible_time(now - 9_000_000, now))
+        self.assertFalse(plausible_time(now - 11_000_000, now))
+        self.assertTrue(plausible_time(now + 500_000, now))
+        self.assertFalse(plausible_time(now + 2_000_000, now))
+
+    def test_epoch_relatches_when_sim_restarts(self):
+        m = EpochMapper(use_sim_time=True)
+        m.latch(wall_now_us=1_791_000_000_000_000, ros_now_us=500_000_000)
+        m.latch(wall_now_us=1_791_000_100_000_000, ros_now_us=600_000_000)
+        m.latch(wall_now_us=1_791_000_200_000_000, ros_now_us=2_000_000)            # Gazebo restarted
+        self.assertEqual(m.relatches, 1)
+        self.assertEqual(m.to_epoch_us(2_000_000), 1_791_000_200_000_000)
 
     def test_stamp(self):
         self.assertEqual(stamp_to_us(12, 345_678_999), 12_345_678)
