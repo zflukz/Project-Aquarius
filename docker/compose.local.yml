@@ -142,7 +142,7 @@ services:
     networks:
       - drone-net
     ports:
-      - "127.0.0.1:5432:5432"               # SQL (local only): psql -h localhost -U aquarius aquarius
+      - "127.0.0.1:${TSDB_PORT:-5432}:5432" # SQL (local only): psql -h localhost -p ${TSDB_PORT:-5432} -U aquarius aquarius
     environment:
       - POSTGRES_USER=aquarius              # user / password / DB: first start only (empty volume)
       - POSTGRES_PASSWORD=${TSDB_PASSWORD:-aquarius-admin}

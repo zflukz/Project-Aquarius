@@ -36,11 +36,14 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 # Micro XRCE-DDS Agent (no apt package for Jazzy). v2.4.3 = version PX4 docs pair with Jazzy.
 # Superbuild downloads Fast-DDS 2.14 / Fast-CDR into /usr/local — same sonames as /opt/ros/jazzy/lib,
 # so entrypoint.sh starts the agent with LD_LIBRARY_PATH=/usr/local/lib.
+# BUILD_JOBS caps parallel C++ compiles: $(nproc)=16 jobs ran the 8 GB WSL VM out of memory and
+# crashed the Docker engine (2026-11-14). Override: --build-arg BUILD_JOBS=4 on a small machine.
+ARG BUILD_JOBS=8
 ARG XRCE_AGENT_REF=v2.4.3
 RUN git clone --depth 1 -b ${XRCE_AGENT_REF} \
         https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/xrce && \
     cmake -S /tmp/xrce -B /tmp/xrce/build -DCMAKE_BUILD_TYPE=Release && \
-    cmake --build /tmp/xrce/build -j"$(nproc)" && \
+    MAKEFLAGS="-j${BUILD_JOBS}" cmake --build /tmp/xrce/build -j"${BUILD_JOBS}" && \
     cmake --install /tmp/xrce/build && ldconfig /usr/local/lib && \
     rm -rf /tmp/xrce
 
@@ -59,7 +62,8 @@ RUN git clone --depth 1 https://github.com/PX4/px4_msgs.git /opt/px4_ws/src/px4_
     git rev-parse HEAD > /opt/px4_ws/PX4_COMMIT && \
     cd / && rm -rf /tmp/px4 && \
     . /opt/ros/jazzy/setup.sh && cd /opt/px4_ws && \
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release && \
+    MAKEFLAGS="-j${BUILD_JOBS}" colcon build --parallel-workers "${BUILD_JOBS}" \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release && \
     rm -rf build log src
 
 # `docker exec telemetry with-ros ros2 topic list` — ROS 2 + px4_msgs sourced for one command
@@ -93,7 +97,7 @@ RUN apt-get update && apt-get install -y python3-opencv && rm -rf /var/lib/apt/l
     pip3 install --no-cache-dir --break-system-packages "confluent-kafka==2.5.3"
 COPY --from=pipeline ros2_ws/src/aquarius_bridge /opt/aquarius_ws/src/aquarius_bridge
 RUN . /opt/ros/jazzy/setup.sh && . /opt/px4_ws/install/setup.sh && cd /opt/aquarius_ws && \
-    colcon build && rm -rf build log && \
+    colcon build --parallel-workers "${BUILD_JOBS}" && rm -rf build log && \
     printf '#!/usr/bin/env bash\nsource /opt/ros/jazzy/setup.bash\nsource /opt/px4_ws/install/setup.bash\nsource /opt/aquarius_ws/install/setup.bash\nexec "$@"\n' \
         > /usr/local/bin/with-ros
 

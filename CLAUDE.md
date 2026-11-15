@@ -34,8 +34,8 @@ C database, D dashboard, E survivors / post-mission, F evaluation); M = `communi
 | :--- | :--- | :--- | :--- | :--- |
 | P0 Simulation | PX4 SITL ×N + Gazebo Baylands in Docker, QGC / noVNC, camera model | us | ✅ | done with Gazebo (user) |
 | P1 Infra / deploy | compose local / server / control, GHCR images, `aquarius` CLI, VM pull, split mode | us | 🟡 | running on the VM server but an **old version** → push current images + `aquarius update` on the VM |
-| P2 Area input | user picks the search area | us | 🟡 | done on branch **`FEAT-WEB-DASHBOARD`** (web dashboard, not merged into `feature-Network-flukez`); this branch: CLI rectangle `LAT,LON --size WxH` only; DB `search_area` not created for real flights |
-| P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ❓ | user not sure; code: `mcpp_mission.py` 1-drone flight PASSED, `--plan-only` 1–4 drones; `NUM_DRONES=2` flight not tested; planned paths not written to `flight_paths` |
+| P2 Area input | user picks the search area | us | 🟡 | map UI done on branch **`FEAT-WEB-DASHBOARD`** (not merged; polygon is only copied to the clipboard, not sent to the planner — see "P2 area input" below); this branch: CLI rectangle `LAT,LON --size WxH` only; DB `search_area` not created for real flights |
+| P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ✅ | **2-drone flight PASSED 2026-11-14** (`aquarius start coverage --size 40x30 --drones 2`, see change log); 1-drone flight PASSED, `--plan-only` 1–4 drones; still missing: polygon area, planned paths not written to `flight_paths`; Grafana checked via DB only (not by eye) |
 | P4 Telemetry + data pipeline | MAVLink → MQTT → Telegraf, ROS 2 → Kafka → ingestion → TimescaleDB + PostGIS (A, B, C; M1, M2; T2, T5) | us + data team | 🟡 | built, **not tested by the user** (Claude's local tests only, VM not tested) |
 | P5 Dashboard | Grafana Fleet, Mission monitor, Path compare (D) | us + data team | ✅ | Grafana runs (user); gap: coverage % / planned path empty for real flights until P2 / P3 write `search_area` / `flight_paths` |
 | P6 AI detection | YOLO on Kafka `image-frames` → Kafka `detections` | 👥 | ⬜ | not in this repo; contract `Data-Pipeline/schemas/detections.schema.json` |
@@ -45,6 +45,52 @@ C database, D dashboard, E survivors / post-mission, F evaluation); M = `communi
 | P10 Evaluation | post-mission summary (E4), benchmarks: coverage, time, detection accuracy (F4); `bench_sim.sh` / `bench_paths.sh` on the VM | ? | ⬜ | not started (user); tools exist (`bench_sim.sh`, `bench_paths.sh`, `pipeline_stats.py`) |
 | P11 Security + network | MQTT auth / ACL, Grafana login, VPN / TLS (M4); DDS across machines (T3) | us | ⬜ | |
 | P12 Real drones | `mavlink-router`, companion computer, `FLEET=real` (M5) | us | ⬜ | |
+
+### P2 area input — branch `FEAT-WEB-DASHBOARD` (read 2026-11-14)
+
+One commit `ddef605` "initialize React interface with Google Maps area selection", branched from an **old** commit
+(before MCPP / telemetry / pipeline; its CLAUDE.md lists only `flight_test.py` / `teleop_drone.py`).
+
+- Files: `Interface/` (React 18 + Vite 5 + `@vis.gl/react-google-maps`; `App.jsx`, `AreaPolygon.jsx`),
+  `docker/interface/` (node build → nginx 1.27, API key injected into `index.html` at start), `docker/compose.map.yml`
+  (service `interface`, image `aquarius-interface`, port `MAP_PORT` 8090), `.env.example` keys `GOOGLE_MAPS_API_KEY`,
+  `MAP_PORT`.
+- What it does: hybrid satellite map, centred on KMUTT (13.6513, 100.4964); click to add polygon points, drag to move,
+  right-click to delete, Undo / Clear / **Copy**. Output JSON:
+  `{"points": [{"lat", "lng"}, ...], "center": {"lat", "lng"}, "area_m2": n}` (7 decimals, area from Google geometry).
+- **Gaps for the concept:**
+  1. Output goes only to the **clipboard** — no backend / API, nothing sends the area to the planner (central).
+  2. **Polygon vs rectangle:** `mcpp_mission.py` / `aquarius start coverage` take only a rectangle (`LAT,LON --size WxH`);
+     MCPP needs polygon support (keep grid cells inside the polygon, like `aq_make_grid` in the DB).
+  3. **Location:** map starts at KMUTT, the sim is at Baylands (37.4122, -121.9989); `mission_cli.py` refuses points
+     > `MAX_DIST` 1000 m from home → the map should start at the drones' home (from telemetry / DB) in sim mode.
+  4. **Port clash:** `MAP_PORT` 8090 = imagestream 8090 on this branch → pick another (e.g. 8085).
+  5. **Merge:** based on an old commit; expect conflicts in `CLAUDE.md` and `docker/.env.example`; the service should
+     move into `compose.local/server.yml` (VM) instead of a separate `compose.map.yml`.
+  6. Field names: `lng` here vs `lon` in the Kafka schemas; GeoJSON (`aq_create_search_area`) needs `[lon, lat]` order
+     and a closed ring.
+  7. The Google Maps key is visible in the page (normal for the JS API) → restrict it by HTTP referrer in Google Cloud.
+- **2026-11-14 local state:** Docker Desktop (now 16 CPU / 8 GB) had lost every Aquarius image except ingestion /
+  interface and all `aquarius-local_*` volumes; not logged in to GHCR → user chose **rebuild locally**. `docker/.env`
+  created from the example: `PX4_NUM_DRONES=2`, `NUM_DRONES=2`, `HEADLESS=1`, `QGC=0`, `AQUARIUS_MODE=local`.
+  Building px4-sim + drone-control first, then telemetry (`PX4_REF` = px4-sim's PX4 commit — the Dockerfile clones
+  PX4 `main` unpinned, so a rebuild picks up a newer PX4), grafana, timescaledb.
+  First build run: `drone-control` image done (3.46 GB); `px4-sim` got through all 10 steps but the build was **stopped
+  while exporting layers** — Claude Code killed the background job because the PC ran low on memory. Layers are in the
+  build cache → a re-run should only redo the export. Re-run (user asked): **`px4-sim` built** (11.9 GB, export only),
+  PX4 `0bd95058` (main, 2026-11-13) → `PX4_REF=0bd95058aa0453086f68817f6aa7d76df47d56f9` in `docker/.env`;
+  **`grafana` (975 MB) + `timescaledb` (753 MB) built**; `telemetry` build started. C: has only ~50 GB free (90 %).
+  **`telemetry` build FAILED — Docker engine crashed** at 28 % of the Micro XRCE-DDS Agent compile (Fast-DDS C++,
+  `failed to receive status: rpc error: code = Unavailable … EOF`, then the engine answers 500). Cause (likely): the
+  Dockerfile compiles with `-j"$(nproc)"` = **16 parallel C++ jobs** (colcon also uses all cores) inside the 8 GB WSL
+  VM → out of memory → engine killed (same symptom as 2026-10-13). Fix options: restart Docker Desktop, then
+  (a) cap build jobs (Dockerfile `ARG BUILD_JOBS=4` for `cmake --build -j` + `MAKEFLAGS` / colcon
+  `--parallel-workers`), and/or (b) `%USERPROFILE%\.wslconfig` `[wsl2] memory=12GB` (PC has 15.7 GB) + `wsl --shutdown`.
+  Waiting for the user.
+- **Decision (user, 2026-11-14): skip the web UI for now.** The area is **mocked with a JSON file** in the same
+  format as the UI's output (`points` / `center` / `area_m2`) so the UI can plug in later; focus = 2-drone sim (P3).
+- Later link (proposal, not decided): web UI → small API on the control computer / VM → mission manager (P9) runs
+  polygon MCPP + uploads missions; same area → `aq_create_search_area()` so the Mission dashboard shows coverage.
 
 ### P9 Re-planning — design (decided by the user 2026-11-14, not implemented)
 
@@ -76,11 +122,59 @@ Today: plan once → upload the whole mission to PX4 over MAVLink → PX4 flies 
   `drone_added`, `survivor_confirm`; optional fields `reason` (text), `area_id`, `plan_version`. Until agreed, use v1
   only (`rtl_triggered` / `reassigned` / `mission_complete`).
 - **Before building P9 (next steps, agreed 2026-11-14):**
-  1. Read P2 on branch `FEAT-WEB-DASHBOARD` (`git show FEAT-WEB-DASHBOARD:<file>`, don't switch branches with
-     uncommitted work): area format (rectangle / polygon), how the area reaches the planner — the manager re-splits it.
+  1. ~~Read P2 on branch `FEAT-WEB-DASHBOARD`~~ → done 2026-11-14: polygon, clipboard only (see "P2 area input").
+     → P9 must re-split a **polygon**, so polygon MCPP comes first.
   2. Test a **2-drone MCPP flight** (closes P3's ❓): `aquarius drones 2` → `aquarius start coverage --size 40x30
      --drones 2` → both drones fly their own part, RTL, `MISSION DONE`; check QGC shows both missions and Grafana both
      tracks. Record the result in the P3 row.
+
+## Resume here (2026-11-14, updated) — P3 done; next: mock-area JSON + polygon MCPP
+
+**Steps A–G below are DONE** (results: change log "2-drone MCPP flight" at the end of this file). The stack is still
+running locally with 2 drones (`TSDB_PORT=5433`). Next: mock-area JSON in the UI format (`points` / `center` /
+`area_m2`) + polygon MCPP → P9 re-planning. Not done yet: look at Grafana Fleet in a browser (only checked via DB /
+API), and QGC with 2 drones (`QGC=0` this run).
+
+### (older) state before steps A–G
+
+**State now**
+- Branch `feature-Network-flukez`, last commit `38cd3eb` (user); only `CLAUDE.md` uncommitted. P2 web UI is on
+  `FEAT-WEB-DASHBOARD` and is skipped for now (area = mock JSON later).
+- `docker/.env` exists (gitignored): `PX4_NUM_DRONES=2`, `NUM_DRONES=2`, `HEADLESS=1`, `QGC=0`, `AQUARIUS_MODE=local`,
+  rest = `.env.example` defaults (`gz_x500`, no camera, `TELEMETRY_PATH=both`, `COMPOSE_PROFILES` empty = no pipeline).
+- `docker/.env` also has `PX4_REF=0bd95058aa0453086f68817f6aa7d76df47d56f9` (= PX4 inside the new px4-sim).
+- Docker Desktop 28.3.2, 16 CPU / 8 GB WSL (no `.wslconfig`), PC 15.7 GB RAM, C: ~50 GB free.
+  **Session ended with the Docker engine crashed** (API answers 500) after the telemetry build ran out of memory.
+- Images (2026-11-14): ✅ `aquarius-px4-sim` 11.9 GB, ✅ `aquarius-drone-control` 3.46 GB, ✅ `aquarius-grafana` 975 MB,
+  ✅ `aquarius-timescaledb` 753 MB, ❌ **`aquarius-telemetry`** (build crashed the engine, see 2026-11-14 local state
+  above). `aquarius-ingestion` / `aquarius-interface` old. Not logged in to GHCR. No `aquarius-local_*` volumes.
+- Not decided yet: Claude may add `ARG BUILD_JOBS=4` to `docker/telemetry/Dockerfile` (step B) — **ask the user first**.
+- **Update 2026-11-14 (later session):** step A done — `C:\Users\Flukz\.wslconfig` `[wsl2] memory=12GB` created,
+  `wsl --shutdown`, Docker Desktop restarted → engine 28.3.2, 16 CPU / 11.7 GB, all built images still present.
+  Step B done (user chose **8**): `ARG BUILD_JOBS=8` (placed after the ROS layer so its cache stays valid) →
+  XRCE `cmake --build -j${BUILD_JOBS}` + `MAKEFLAGS`, px4_msgs `colcon --parallel-workers` + `MAKEFLAGS`,
+  aquarius_bridge `colcon --parallel-workers`. Step C (telemetry build): **engine survived** — ROS layer redone
+  (cache lost, 1148 s), XRCE agent `-j8` 167 s, px4_msgs 254 s, pip 158 s, export + `naming to …telemetry:latest done`;
+  Claude Code then killed the background job for low **host** memory during the final "unpacking" step. Image listed
+  (946 MB); unpack possibly incomplete → re-run (user asked): cached, export 186 s incl. unpack 123 s, exit 0 →
+  **`aquarius-telemetry` 4.34 GB built — step C done.**
+
+**Next steps — each with the state it must reach**
+
+| # | Do | Must end in |
+| :--- | :--- | :--- |
+| A | Restart Docker Desktop (tray → Quit, open again). Recommended first: `C:\Users\Flukz\.wslconfig` = `[wsl2]` + `memory=12GB`, then `wsl --shutdown`, then start Docker Desktop | `docker info` works; `docker images` still lists the 4 built images |
+| B | With the user's OK: cap compile jobs in `docker/telemetry/Dockerfile` (`ARG BUILD_JOBS=4` → `cmake --build -j${BUILD_JOBS}`, `MAKEFLAGS=-j${BUILD_JOBS}`, colcon `--parallel-workers ${BUILD_JOBS}`) | Dockerfile no longer uses `$(nproc)` |
+| C | Close heavy apps, then `cd docker && docker compose -f compose.local.yml build telemetry` (≈ 50 min+ cold; if Claude's background job is killed for memory, user runs it with `!`) | `aquarius-telemetry` image present (~4 GB); engine still up |
+| D | `aquarius init local --drones 2 --headless` (or `docker compose -f compose.local.yml up -d`) | `docker logs px4-sim` shows `drone0 (sysid 1) -> …` **and** `drone1 (sysid 2) -> …`; `aquarius status` lists 2 drones, GPS fix, ready |
+| E | `aquarius start coverage --size 40x30 --drones 2` | each drone gets its own region, uploads its mission, takes off (drone1 3 m higher), flies all waypoints, RTL, lands; log ends `=== … DONE ===`, exit 0; no leftover `mavsdk_server` |
+| F | Grafana <http://localhost:3000> → Fleet | drone 0 + drone 1 online, two tracks on the map, mission progress for both |
+| G | Write results into this file: P3 row (❓ → ✅ / 🟡 with what failed) + a dated change-log entry (times, RTF, problems) | P3 status settled |
+
+After P3: mock-area JSON (UI format `points` / `center` / `area_m2`) + polygon MCPP → P9 re-planning (design above).
+Known risks: Docker OOM during builds (happened 2026-10-13 and 2026-11-14); new PX4 `main` may change topic versions
+or behaviour (check `flight_test.py` first if the coverage flight misbehaves); 2 drones without camera should be
+RTF ≈ 1 headless.
 
 ## Conventions
 
@@ -596,8 +690,9 @@ images (`vsc-project-aquarius-*`, `texlive/texlive`).
 ### NOT yet verified
 
 - [ ] Gazebo (8080) and QGC (8082) checked in a real browser — so far only screenshots of `:99` / `:100`.
-- [ ] `mcpp_mission.py` with `NUM_DRONES=2` in the sim, and `AUTO_RUN` start via compose.
-- [ ] `PX4_NUM_DRONES=2`: both drones spawn in one world, each reachable on 14540 / 14541, both in QGC.
+- [x] `mcpp_mission.py` with `NUM_DRONES=2` in the sim (2026-11-14, via `aquarius start coverage --drones 2`).
+      `AUTO_RUN` start via compose still not tested.
+- [x] `PX4_NUM_DRONES=2`: both drones spawn in one world, reachable on 14540 / 14541 (2026-11-14). QGC not checked (`QGC=0`).
 - [ ] `docker compose push` to GHCR and pull on a real VM; split-mode flight from the control computer.
 - [ ] Docker Desktop (Windows) published UDP range 14540-14549 delivers PX4's packets to the container.
 
@@ -619,3 +714,25 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
 - Data pipeline merge (2026-11-08): local work done; open points in `docker/merge_status.md` → "Next".
 - Future plan (multi-drone phases, swarm script, MicroXRCE agent, per-drone containers, CI build/push):
   see `docker/README.md` → "Future plan".
+
+## Change log — 2-drone MCPP flight, telemetry rebuild, local DB port (2026-11-14)
+
+- **Docker recovery:** `C:\Users\Flukz\.wslconfig` `[wsl2] memory=12GB` (outside the repo) → engine 16 CPU / 11.7 GB.
+- **`docker/telemetry/Dockerfile`:** `ARG BUILD_JOBS=8` (user's choice; after the ROS layer) instead of `$(nproc)` for
+  the XRCE agent (`cmake --build -j` + `MAKEFLAGS`), px4_msgs (`colcon --parallel-workers` + `MAKEFLAGS`) and
+  aquarius_bridge. Build: ROS layer redone 1148 s (cache lost in the crash), agent 167 s, px4_msgs 254 s, **engine
+  stayed up**. The first run was killed by Claude Code for low *host* memory during "unpacking"; a cached re-run
+  finished → `aquarius-telemetry` 4.34 GB. Host RAM is tight with WSL at 12 of 15.7 GB → lower to 10 GB if it repeats.
+- **`docker/compose.local.yml`:** timescaledb host port `127.0.0.1:${TSDB_PORT:-5432}:5432` (was hard-coded 5432).
+  Reason: a native Windows PostgreSQL (`postgres.exe`) holds 5432 → "bind: forbidden by its access permissions".
+  `.env.example` comment no longer says "VM only"; `docker/.env` `TSDB_PORT=5433` (psql `-p 5433`). Inside the
+  network everything still uses `timescaledb:5432`.
+- **P3 verified — 2-drone MCPP flight PASSED** (`aquarius init local --drones 2 --headless`, `gz_x500`, no camera,
+  `QGC=0`, then `aquarius start coverage --size 40x30 --drones 2`, default centre = home):
+  both drones linked (`drone0 (sysid 1) -> …:14540`, `drone1 (sysid 2) -> …:14541`), `status --drone 0/1`: HOLD,
+  100 %, FIX_3D 10 sats, armable. Flight: drone0 14 waypoints @ 20 m, drone1 13 @ 23 m; both armed / took off together,
+  14/14 + 13/13, RTL, both landed, `=== MCPP coverage flight PASSED ===`, exit 0, CLI wall time 1 min 40 s, no leftover
+  `mavsdk_server`. TimescaleDB `position`: 1538 rows per drone, max `alt_rel` 20.1 / 23.0 m; separate regions —
+  drone0 lon −121.998882…−121.998679, drone1 −121.999077…−121.998877 (same lat band 37.412059…37.412287, no overlap);
+  `mission` max seq 28 / 26. Grafana `/api/health` ok, Fleet dashboard 200.
+  Not checked: dashboard panels by eye, QGC with both missions, RTF number.
