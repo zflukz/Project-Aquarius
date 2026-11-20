@@ -1,0 +1,7 @@
+newmtl trunk
+Ka 0.36 0.29 0.23
+Kd 0.36 0.29 0.23
+
+newmtl leaves
+Ka 0.24 0.42 0.17
+Kd 0.24 0.42 0.17

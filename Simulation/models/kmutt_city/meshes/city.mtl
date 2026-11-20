@@ -1,0 +1,84 @@
+newmtl facade_0
+Ka 0.92 0.9 0.86
+Kd 0.92 0.9 0.86
+Ks 0.05 0.05 0.05
+map_Kd textures/Facade_0.png
+
+newmtl facade_1
+Ka 0.92 0.9 0.86
+Kd 0.92 0.9 0.86
+Ks 0.05 0.05 0.05
+map_Kd textures/Facade_1.png
+
+newmtl facade_2
+Ka 0.92 0.9 0.86
+Kd 0.92 0.9 0.86
+Ks 0.05 0.05 0.05
+map_Kd textures/Facade_2.png
+
+newmtl facade_3
+Ka 0.92 0.9 0.86
+Kd 0.92 0.9 0.86
+Ks 0.05 0.05 0.05
+map_Kd textures/Facade_3.png
+
+newmtl roof_flat
+Ka 0.85 0.85 0.85
+Kd 0.85 0.85 0.85
+Ks 0.05 0.05 0.05
+map_Kd textures/Concrete034_Color.jpg
+
+newmtl roof_tiles
+Ka 0.75 0.4 0.3
+Kd 0.75 0.4 0.3
+Ks 0.05 0.05 0.05
+map_Kd textures/RoofTiles.png
+
+newmtl road_plain
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_Plain.png
+
+newmtl road_path
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_Path.png
+
+newmtl road_twolane
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_TwoLane.png
+
+newmtl road_fourlane
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_FourLane.png
+
+newmtl road_sixlane
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_SixLane.png
+
+newmtl road_oneway2
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_OneWay2.png
+
+newmtl road_oneway3
+Ka 1 1 1
+Kd 1 1 1
+Ks 0.05 0.05 0.05
+map_Kd textures/Road_OneWay3.png
+
+newmtl water
+Ka 0.27 0.27 0.19
+Kd 0.27 0.27 0.19
+Ks 0.05 0.05 0.05
+d 0.85
+

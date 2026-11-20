@@ -1,0 +1,433 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="kmutt_city">
+    <static>true</static>
+    <link name="link">
+      <visual name="buildings_0_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_0_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_0_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_0_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_1_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_1_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_1_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_1_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_3_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_3_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_2_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_2_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_2_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_2_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_3_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_3_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_4_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_4_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_4_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_4_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_0_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_0_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_1_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_1_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_0_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_0_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_2_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_2_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_3_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_3_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_3_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_3_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_4_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_4_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_4_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_4_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_1_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_1_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_1_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_1_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_1_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_0_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_0_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_0_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_3_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_3_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_3_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_2_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_2_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_2_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_2_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_2_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="buildings_4_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="buildings_4_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/buildings_4_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_1_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_1_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_0_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_0_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_1_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_1_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_0_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_0_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_2_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_2_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_3_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_3_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_2_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_2_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_3_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_3_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_4_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_1.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_4_1_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_1.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_4_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_0.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_4_0_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_0.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_1_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_1_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_0_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_0_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_1_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_1_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_0_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_0_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_2_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_2_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_3_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_3_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_3_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_3_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_2_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_2_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_4_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_3.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_4_3_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_3.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_4_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_2.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_4_2_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_2.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_1_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_1_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_1_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_0_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_0_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_0_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_3_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_3_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_3_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_2_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_2_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_2_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="roads_4_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_4.obj</uri></mesh></geometry>
+      </visual>
+      <collision name="roads_4_4_collision">
+        <geometry><mesh><uri>model://kmutt_city/meshes/roads_4_4.obj</uri></mesh></geometry>
+      </collision>
+      <visual name="water_0_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_0_0.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_1_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_1_0.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_2_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_2_0.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_3_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_3_0.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_4_0">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_4_0.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_0_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_0_1.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_1_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_1_1.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_2_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_2_1.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_3_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_3_1.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_4_1">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_4_1.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_0_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_0_2.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_1_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_1_2.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_2_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_2_2.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_3_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_3_2.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_4_2">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_4_2.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_0_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_0_3.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_1_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_1_3.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_2_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_2_3.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_3_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_3_3.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_4_3">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_4_3.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_0_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_0_4.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_1_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_1_4.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_2_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_2_4.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_3_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_3_4.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+      <visual name="water_4_4">
+        <geometry><mesh><uri>model://kmutt_city/meshes/water_4_4.obj</uri></mesh></geometry>
+        <material><ambient>0.2 0.22 0.16 1</ambient><diffuse>0.27 0.27 0.19 1</diffuse><specular>0.6 0.6 0.6 1</specular></material>
+        <transparency>0.15</transparency>
+      </visual>
+    </link>
+  </model>
+</sdf>
