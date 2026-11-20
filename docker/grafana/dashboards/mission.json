@@ -96,7 +96,7 @@
       "id": 2,
       "type": "stat",
       "title": "Coverage",
-      "description": "พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath",
+      "description": "พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath · \"ยังไม่พร้อม\" = ภารกิจนี้ยังไม่มีพื้นที่ค้นหา (search_area)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "aquarius-tsdb"
@@ -117,7 +117,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT c.coverage_pct\n  FROM search_area a, aq_coverage(a.area_id, 'flown', $swath) c\n WHERE a.area_id = aq_current_area('$mission')"
+          "rawSql": "\nSELECT c.coverage_pct\n  FROM search_area a, aq_coverage(a.area_id, 'flown', $swath) c\n WHERE a.area_id = aq_current_area(NULLIF('$mission', '')::uuid)"
         }
       ],
       "fieldConfig": {
@@ -143,7 +143,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "noValue": "ยังไม่พร้อม"
         },
         "overrides": []
       },
@@ -187,7 +188,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT count(*) FROM persons WHERE mission_id = '$mission' AND status <> 'rejected'"
+          "rawSql": "\nSELECT count(*) FROM persons WHERE mission_id = NULLIF('$mission', '')::uuid AND status <> 'rejected'"
         }
       ],
       "fieldConfig": {
@@ -209,7 +210,8 @@
                 "color": "red"
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -253,7 +255,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT count(*) FROM survivors WHERE mission_id = '$mission'"
+          "rawSql": "\nSELECT count(*) FROM survivors WHERE mission_id = NULLIF('$mission', '')::uuid"
         }
       ],
       "fieldConfig": {
@@ -271,7 +273,8 @@
                 "color": "text"
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -315,7 +318,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT count(*) FROM aq_drone_status('$mission', interval '10 seconds')"
+          "rawSql": "\nSELECT count(*) FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '10 seconds')"
         }
       ],
       "fieldConfig": {
@@ -337,7 +340,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -403,7 +407,8 @@
                 "color": "red"
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -460,7 +465,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT lat, lon, CASE WHEN covered THEN 1 ELSE 0 END AS covered, cell_row AS \"แถว\", cell_col AS \"คอลัมน์\"\n  FROM aq_cell_coverage(aq_current_area('$mission'), $swath)"
+          "rawSql": "\nSELECT lat, lon, CASE WHEN covered THEN 1 ELSE 0 END AS covered, cell_row AS \"แถว\", cell_col AS \"คอลัมน์\"\n  FROM aq_cell_coverage(aq_current_area(NULLIF('$mission', '')::uuid), $swath)"
         },
         {
           "refId": "B",
@@ -471,7 +476,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT ST_Y(p.geom) AS lat, ST_X(p.geom) AS lon, fp.drone_id\n  FROM flight_paths fp,\n       LATERAL ST_DumpPoints(ST_Segmentize(fp.geom::geography, 10)::geometry) p\n WHERE fp.mission_id = '$mission' AND fp.kind = 'planned'\n   AND fp.version = (SELECT max(version) FROM flight_paths q\n                      WHERE q.mission_id = fp.mission_id AND q.drone_id = fp.drone_id AND q.kind = 'planned')"
+          "rawSql": "\nSELECT ST_Y(p.geom) AS lat, ST_X(p.geom) AS lon, fp.drone_id\n  FROM flight_paths fp,\n       LATERAL ST_DumpPoints(ST_Segmentize(fp.geom::geography, 10)::geometry) p\n WHERE fp.mission_id = NULLIF('$mission', '')::uuid AND fp.kind = 'planned'\n   AND fp.version = (SELECT max(version) FROM flight_paths q\n                      WHERE q.mission_id = fp.mission_id AND q.drone_id = fp.drone_id AND q.kind = 'planned')"
         },
         {
           "refId": "C",
@@ -482,7 +487,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT DISTINCT ON (drone_id, time_bucket('2 seconds', ts)) lat, lon, drone_id\n  FROM telemetry\n WHERE mission_id = '$mission' AND $__timeFilter(ts) AND (alt_rel IS NULL OR alt_rel >= 2)\n ORDER BY drone_id, time_bucket('2 seconds', ts), ts"
+          "rawSql": "\nSELECT DISTINCT ON (drone_id, time_bucket('2 seconds', ts)) lat, lon, drone_id\n  FROM telemetry\n WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND (alt_rel IS NULL OR alt_rel >= 2)\n ORDER BY drone_id, time_bucket('2 seconds', ts), ts"
         },
         {
           "refId": "D",
@@ -493,7 +498,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT drone_id, lat, lon, round(battery_pct) AS \"แบต %\", nav_state AS \"โหมด\"\n  FROM aq_drone_status('$mission', interval '1 hour')"
+          "rawSql": "\nSELECT drone_id, lat, lon, round(battery_pct) AS \"แบต %\", nav_state AS \"โหมด\"\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour')"
         },
         {
           "refId": "E",
@@ -504,7 +509,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT lat, lon, n_detections AS \"ตรวจพบ\", round(max_conf::numeric, 2) AS \"มั่นใจ\", status\n  FROM survivor_pins WHERE mission_id = '$mission' AND status <> 'rejected'"
+          "rawSql": "\nSELECT lat, lon, n_detections AS \"ตรวจพบ\", round(max_conf::numeric, 2) AS \"มั่นใจ\", status\n  FROM survivor_pins WHERE mission_id = NULLIF('$mission', '')::uuid AND status <> 'rejected'"
         },
         {
           "refId": "F",
@@ -515,14 +520,15 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT lat, lon, label FROM ground_truth_persons WHERE mission_id = '$mission'"
+          "rawSql": "\nSELECT lat, lon, label FROM ground_truth_persons WHERE mission_id = NULLIF('$mission', '')::uuid"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic-by-name"
-          }
+          },
+          "noValue": "ยังไม่มีข้อมูล"
         },
         "overrides": [
           {
@@ -642,8 +648,12 @@
           "showMeasure": true
         },
         "basemap": {
-          "type": "default",
-          "name": "Basemap"
+          "type": "xyz",
+          "name": "Satellite",
+          "config": {
+            "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            "attribution": "Tiles © Esri"
+          }
         },
         "layers": [
           {
@@ -956,14 +966,16 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT drone_id AS \"โดรน\", round(battery_pct) AS \"แบต %\", round(alt_rel::numeric, 1) AS \"สูง (m)\",\n       round(speed_ms::numeric, 1) AS \"เร็ว (m/s)\", nav_state AS \"โหมด\", armed,\n       round(age_s::numeric, 1) AS \"ล่าสุด (s)\"\n  FROM aq_drone_status('$mission', interval '1 hour')"
+          "rawSql": "\nSELECT drone_id AS \"โดรน\", round(battery_pct) AS \"แบต %\", round(alt_rel::numeric, 1) AS \"สูง (m)\",\n       round(speed_ms::numeric, 1) AS \"เร็ว (m/s)\", nav_state AS \"โหมด\", armed,\n       landed AS \"บนพื้น\", gps_satellites AS \"ดาวเทียม\", health_ok AS \"สุขภาพ\",\n       round(age_s::numeric, 1) AS \"ล่าสุด (s)\"\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour')"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "center"
-          }
+            "align": "center",
+            "minWidth": 50
+          },
+          "noValue": "ไม่มีโดรนส่งข้อมูล"
         },
         "overrides": [
           {
@@ -1042,6 +1054,40 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "สุขภาพ"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "OK",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "FAULT",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -1075,7 +1121,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_remaining) * 100 AS \"แบต %\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_remaining) * 100 AS \"แบต %\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1092,7 +1138,8 @@
             "spanNulls": true
           },
           "min": 0,
-          "max": 100
+          "max": 100,
+          "noValue": "ยังไม่มีข้อมูล"
         },
         "overrides": []
       },
@@ -1133,7 +1180,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(alt_rel) AS \"สูง (m)\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(alt_rel) AS \"สูง (m)\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts)\n GROUP BY 1, drone_id ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1148,7 +1195,8 @@
             "fillOpacity": 0,
             "showPoints": "never",
             "spanNulls": true
-          }
+          },
+          "noValue": "ยังไม่มีข้อมูล"
         },
         "overrides": []
       },
@@ -1189,11 +1237,13 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "\nSELECT left(person_id::text, 8) AS \"หมุด\", status AS \"สถานะ\", n_detections AS \"ตรวจพบ (ครั้ง)\",\n       round(max_conf::numeric, 2) AS \"มั่นใจสูงสุด\", round(lat::numeric, 6) AS lat, round(lon::numeric, 6) AS lon,\n       first_ts AS \"พบครั้งแรก\", last_ts AS \"เห็นล่าสุด\", best_snapshot AS \"ภาพหลักฐาน\"\n  FROM survivor_pins WHERE mission_id = '$mission' ORDER BY first_ts"
+          "rawSql": "\nSELECT left(person_id::text, 8) AS \"หมุด\", status AS \"สถานะ\", n_detections AS \"ตรวจพบ (ครั้ง)\",\n       round(max_conf::numeric, 2) AS \"มั่นใจสูงสุด\", round(lat::numeric, 6) AS lat, round(lon::numeric, 6) AS lon,\n       first_ts AS \"พบครั้งแรก\", last_ts AS \"เห็นล่าสุด\", best_snapshot AS \"ภาพหลักฐาน\"\n  FROM survivor_pins WHERE mission_id = NULLIF('$mission', '')::uuid ORDER BY first_ts"
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "ยังไม่พบผู้ประสบภัย"
+        },
         "overrides": []
       },
       "options": {
@@ -1204,7 +1254,7 @@
     {
       "id": 13,
       "type": "row",
-      "title": "กล้อง (สด จาก Kafka image-frames)",
+      "title": "แบตเตอรี่ · GPS · สุขภาพ · ภารกิจ (จาก uXRCE)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1216,48 +1266,553 @@
     },
     {
       "id": 14,
-      "type": "text",
-      "title": "",
-      "description": "ภาพเดียวกับที่ AI Detection อ่าน · ตั้งที่อยู่ service ที่ตัวแปร stream_url",
-      "datasource": null,
-      "gridPos": {
-        "x": 0,
-        "y": 31,
-        "w": 24,
-        "h": 11
-      },
-      "targets": [],
-      "options": {
-        "mode": "html",
-        "content": "<iframe src=\"$stream_url/?minw=280\" style=\"width:100%;height:100%;border:0;background:#111217\"></iframe>"
-      }
-    },
-    {
-      "id": 15,
-      "type": "row",
-      "title": "สุขภาพ pipeline (D3)",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 42,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 16,
-      "type": "timeseries",
-      "title": "ความหน่วงโดรน → ฐานข้อมูล",
-      "description": "received_at − ts ของ telemetry ทุก 10 วินาที · เชื่อได้เมื่อนาฬิกาตรงกัน (โดรนจริง + chrony หรือ Gazebo ที่ RTF ≈ 1)",
+      "type": "stat",
+      "title": "GPS fix",
+      "description": "PX4 vehicle_gnss fix ของแต่ละลำ (ค่าล่าสุด)",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 0,
-        "y": 43,
-        "w": 12,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (gps_fix_type)::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "ไม่มี fix",
+                  "color": "red",
+                  "index": 0
+                },
+                "2": {
+                  "text": "2D",
+                  "color": "orange",
+                  "index": 1
+                },
+                "3": {
+                  "text": "3D",
+                  "color": "green",
+                  "index": 2
+                },
+                "4": {
+                  "text": "DGPS",
+                  "color": "green",
+                  "index": 3
+                },
+                "5": {
+                  "text": "RTK float",
+                  "color": "green",
+                  "index": 4
+                },
+                "6": {
+                  "text": "RTK fixed",
+                  "color": "green",
+                  "index": 5
+                },
+                "8": {
+                  "text": "ประมาณค่า",
+                  "color": "orange",
+                  "index": 6
+                }
+              }
+            }
+          ],
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "ดาวเทียม GPS",
+      "description": "จำนวนดาวเทียมที่ใช้ (ค่าล่าสุด) · น้อยกว่า 6 = เหลือง น้อยกว่า 4 = แดง",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (gps_satellites)::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 4,
+                "color": "orange"
+              },
+              {
+                "value": 6,
+                "color": "green"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "none",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "สุขภาพ",
+      "description": "FAULT = มี failsafe flag ร้ายแรงของ PX4 (attitude / position / altitude / velocity invalid, GNSS lost, แบตเสีย, failure detector) · รายชื่อ flag อยู่ในตารางด้านล่าง",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (health_ok)::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 0
+                },
+                "0": {
+                  "text": "FAULT",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "บนพื้น / บิน",
+      "description": "PX4 vehicle_land_detected.landed",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (landed)::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "บนพื้น",
+                  "color": "blue",
+                  "index": 0
+                },
+                "0": {
+                  "text": "กำลังบิน",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "CPU (PX4)",
+      "description": "PX4 cpuload (%) · เกิน 80 = แดง",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (round(cpu_load))::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 60,
+                "color": "orange"
+              },
+              {
+                "value": 80,
+                "color": "red"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "percent",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "ภารกิจ",
+      "description": "waypoint ปัจจุบัน / ทั้งหมด ของภารกิจที่อัปโหลด (PX4 mission_result) · ว่าง = ไม่มีภารกิจ",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 31,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id, (CASE WHEN mission_total > 0 THEN round(100.0 * (mission_seq + 1) / mission_total) END)::int AS value\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour') ORDER BY length(drone_id), drone_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "text"
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "percent",
+          "noValue": "ไม่มีภารกิจ"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${__data.fields.drone_id}"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "แรงดันแบตเตอรี่",
+      "description": "battery_status voltage_v",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 8,
         "h": 7
       },
       "targets": [
@@ -1270,12 +1825,12 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'),\n       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS \"p50\",\n       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS \"p95\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(received_at)\n GROUP BY 1 ORDER BY 1"
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_voltage) AS \"V\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND battery_voltage IS NOT NULL\n GROUP BY 1, drone_id ORDER BY 1"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "volt",
           "color": {
             "mode": "palette-classic-by-name"
           },
@@ -1285,7 +1840,8 @@
             "fillOpacity": 0,
             "showPoints": "never",
             "spanNulls": true
-          }
+          },
+          "noValue": "ยังไม่มีข้อมูล"
         },
         "overrides": []
       },
@@ -1302,17 +1858,455 @@
       }
     },
     {
-      "id": 17,
+      "id": 21,
       "type": "timeseries",
-      "title": "telemetry ที่เข้าฐานข้อมูลต่อลำ",
-      "description": "ควรเป็น ~10 Hz ต่อลำ (A2) · ต่ำกว่านั้น = ข้อมูลหายระหว่างทาง (D3 loss rate)",
+      "title": "ดาวเทียม GPS",
+      "description": "satellites_used",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 35,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, max(gps_satellites) AS \"ดวง\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND gps_satellites IS NOT NULL\n GROUP BY 1, drone_id ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "noValue": "ยังไม่มีข้อมูล"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "ความแม่นยำ GPS (eph / epv)",
+      "description": "eph = แนวนอน, epv = แนวตั้ง (เมตร) · ยิ่งน้อยยิ่งแม่น",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 35,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id || ' eph' AS metric, avg(gps_eph) AS \"m\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND gps_eph IS NOT NULL GROUP BY 1, drone_id\nUNION ALL\nSELECT $__timeGroupAlias(ts, '2s'), drone_id || ' epv' AS metric, avg(gps_epv) AS \"m\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND gps_epv IS NOT NULL GROUP BY 1, drone_id\n ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "lengthm",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "noValue": "ยังไม่มีข้อมูล"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "table",
+      "title": "failsafe flags ที่ทำงานอยู่",
+      "description": "flag ที่เป็นจริงตอนนี้ · บนพื้นใน SITL ปกติจะเห็น auto_mission_missing / manual_control_signal_lost / offboard_control_signal_lost — ไม่ใช่ความผิดปกติ",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT drone_id AS \"โดรน\", CASE WHEN health_ok THEN 'OK' WHEN health_ok = false THEN 'FAULT' END AS \"สุขภาพ\",\n       coalesce(array_to_string(failsafe_flags, ', '), '-') AS \"flags (PX4 failsafe_flags)\"\n  FROM aq_drone_status(NULLIF('$mission', '')::uuid, interval '1 hour')"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "ไม่มีโดรนส่งข้อมูล"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "สุขภาพ"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "OK": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "FAULT": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "โดรน"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "สุขภาพ"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 24,
+      "type": "table",
+      "title": "ข้อความจาก PX4 (events)",
+      "description": "PX4 mavlink_log (= STATUSTEXT ของฝั่ง MQTT) ผ่าน Kafka topic events · เช่น Takeoff / Landing detected, failsafe",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\nSELECT ts AS \"เวลา\", drone_id AS \"โดรน\", level AS \"ระดับ\", text AS \"ข้อความ\"\n  FROM events WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts)\n ORDER BY ts DESC LIMIT 200"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "ยังไม่มีข้อความ"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ระดับ"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "emergency": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "alert": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "critical": {
+                        "color": "red",
+                        "index": 2
+                      },
+                      "error": {
+                        "color": "red",
+                        "index": 3
+                      },
+                      "warning": {
+                        "color": "orange",
+                        "index": 4
+                      },
+                      "notice": {
+                        "color": "blue",
+                        "index": 5
+                      },
+                      "info": {
+                        "color": "text",
+                        "index": 6
+                      },
+                      "debug": {
+                        "color": "#8e8e8e",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "โดรน"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "เวลา"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "waypoint ของภารกิจ",
+      "description": "waypoint ปัจจุบัน (1 = จุดแรก) ของแต่ละลำ",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "aquarius-tsdb"
       },
       "gridPos": {
         "x": 12,
-        "y": 43,
+        "y": 46,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, max(mission_seq + 1) AS \"waypoint\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(ts) AND mission_total > 0\n GROUP BY 1, drone_id ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "noValue": "ยังไม่มีข้อมูล"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "กล้อง (สด จาก Kafka image-frames)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 27,
+      "type": "text",
+      "title": "",
+      "description": "ภาพเดียวกับที่ AI Detection อ่าน · ตั้งที่อยู่ service ที่ตัวแปร stream_url",
+      "datasource": null,
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 24,
+        "h": 11
+      },
+      "targets": [],
+      "options": {
+        "mode": "html",
+        "content": "<iframe src=\"$stream_url/?minw=280\" style=\"width:100%;height:100%;border:0;background:#111217\"></iframe>"
+      }
+    },
+    {
+      "id": 28,
+      "type": "row",
+      "title": "สุขภาพ pipeline (D3)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 66,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "ความหน่วงโดรน → ฐานข้อมูล",
+      "description": "received_at − sent_at ของ telemetry ทุก 10 วินาที (bridge → Kafka → ingestion → ฐานข้อมูล, นาฬิกาจริงทั้งคู่ 0008) · ไม่ใช้ ts เพราะใน Gazebo ts เป็นเวลา sim ที่ช้ากว่านาฬิกาจริงเมื่อ RTF < 1 · แถวเก่าก่อน 0008 ใช้ ts",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 67,
         "w": 12,
         "h": 7
       },
@@ -1326,7 +2320,64 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'), drone_id AS metric, count(*) / 10.0 AS \"Hz\"\n  FROM telemetry WHERE mission_id = '$mission' AND $__timeFilter(received_at)\n GROUP BY 1, drone_id ORDER BY 1"
+          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'),\n       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - coalesce(sent_at, ts)) * 1000) AS \"p50\",\n       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - coalesce(sent_at, ts)) * 1000) AS \"p95\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(received_at)\n GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "noValue": "ยังไม่มีข้อมูล"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "telemetry ที่เข้าฐานข้อมูลต่อลำ",
+      "description": "ควรเป็น ~10 Hz ต่อลำ (A2) · ต่ำกว่านั้น = ข้อมูลหายระหว่างทาง (D3 loss rate)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "aquarius-tsdb"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 67,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "aquarius-tsdb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "\nSELECT $__timeGroupAlias(received_at, '10s'), drone_id AS metric, count(*) / 10.0 AS \"Hz\"\n  FROM telemetry WHERE mission_id = NULLIF('$mission', '')::uuid AND $__timeFilter(received_at)\n GROUP BY 1, drone_id ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1342,7 +2393,8 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "min": 0
+          "min": 0,
+          "noValue": "ยังไม่มีข้อมูล"
         },
         "overrides": []
       },

@@ -38,7 +38,7 @@ C database, D dashboard, E survivors / post-mission, F evaluation); M = `communi
 | P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ✅ | **2-drone flight PASSED 2026-11-14** (`aquarius start coverage --size 40x30 --drones 2`, see change log); 1-drone flight PASSED, `--plan-only` 1–4 drones; still missing: polygon area, planned paths not written to `flight_paths`; Grafana checked via DB only (not by eye) |
 | P4 Telemetry + data pipeline | MAVLink → MQTT → Telegraf, ROS 2 → Kafka → ingestion → TimescaleDB + PostGIS (A, B, C; M1, M2; T2, T5) | us + data team | 🟡 | built, **not tested by the user** (Claude's local tests only, VM not tested) |
 | P5 Dashboard | Grafana Fleet, Mission monitor, Path compare (D) | us + data team | ✅ | Grafana runs (user); gap: coverage % / planned path empty for real flights until P2 / P3 write `search_area` / `flight_paths` |
-| P6 AI detection | YOLO on Kafka `image-frames` → Kafka `detections` | 👥 | ⬜ | not in this repo; contract `Data-Pipeline/schemas/detections.schema.json` |
+| P6 AI detection | YOLO on Kafka `image-frames` → Kafka `detections` | 👥 | 🟡 | **template merged 2026-11-15** (PR #2, `Data-Pipeline/ai/`): Kafka consumer + schema check + evidence JPEG + `fake` / YOLO (`ultralytics`) detector, 16 unit tests pass; real model = other team; not run against live Kafka; not in compose (run by hand); sim-time lag issue, see change log 2026-11-15 |
 | P7 Geo-localization | detection + drone pose + camera model → lat/lon → Kafka `survivors` | 👥 | ⬜ | not in this repo; contract `survivors.schema.json`; receiving side done (ingestion → `persons` merge C5 → pins) |
 | P8 People in the sim | person models in the Gazebo world + `ground_truth_persons` (F3) | ? | ⬜ | needed to test P6 / P7 (Baylands has no people) |
 | P9 Re-planning | central re-plan when the fleet changes, see below | us | ⬜ | `replanning-events` schema / topic / table exist, nothing sends them |
@@ -128,7 +128,11 @@ Today: plan once → upload the whole mission to PX4 over MAVLink → PX4 flies 
      --drones 2` → both drones fly their own part, RTL, `MISSION DONE`; check QGC shows both missions and Grafana both
      tracks. Record the result in the P3 row.
 
-## Resume here (2026-11-14, updated) — P3 done; next: mock-area JSON + polygon MCPP
+## Resume here (2026-11-15) — P3 done, PRs #1 / #2 merged + reviewed; next: mock-area JSON + polygon MCPP
+
+Branch `feature-Network-flukez` at `617745a` (A–G work committed in `1355a50`, then PR #1 fix-bridge-clock + PR #2
+ai-template merged). Review + tests: change log 2026-11-15 at the end. To deploy PR #1, rebuild `telemetry` (only
+the last layers) — the running image still has the old bridge.
 
 **Steps A–G below are DONE** (results: change log "2-drone MCPP flight" at the end of this file). The stack is still
 running locally with 2 drones (`TSDB_PORT=5433`). Next: mock-area JSON in the UI format (`points` / `center` /
@@ -694,7 +698,8 @@ images (`vsc-project-aquarius-*`, `texlive/texlive`).
       `AUTO_RUN` start via compose still not tested.
 - [x] `PX4_NUM_DRONES=2`: both drones spawn in one world, reachable on 14540 / 14541 (2026-11-14). QGC not checked (`QGC=0`).
 - [ ] `docker compose push` to GHCR and pull on a real VM; split-mode flight from the control computer.
-- [ ] Docker Desktop (Windows) published UDP range 14540-14549 delivers PX4's packets to the container.
+- [~] Docker Desktop (Windows) published UDP range 14540-14549 delivers PX4's packets to the container — works, but the
+      Windows listener of a port can vanish (2026-11-17, see change log); recreate drone-control. Real VM split still untested.
 
 Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones → push → VM pull → split test.
 
@@ -736,3 +741,310 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
   drone0 lon −121.998882…−121.998679, drone1 −121.999077…−121.998877 (same lat band 37.412059…37.412287, no overlap);
   `mission` max seq 28 / 26. Grafana `/api/health` ok, Fleet dashboard 200.
   Not checked: dashboard panels by eye, QGC with both missions, RTF number.
+
+## Change log — review of merged PRs #1 / #2 (2026-11-15)
+
+Merged by the user: `2068f43` PR #1 **fix-bridge-clock** (`c0b90ac`) and `617745a` PR #2 **ai-template**
+(`b9fad5d`, `e6f9f1c`). Reviewed + unit-tested by Claude (throwaway `python:3.12-slim`, repo mounted); no code changed.
+
+- **PR #1 bridge clock** (`aquarius_bridge/core.py`, `bridge_node.py`): `ClockOffsetEstimator` ready after 20
+  samples, restarts after 20 samples > 1 s above the minimum (PX4 clock step back); `plausible_time()` drops mapped
+  samples outside now −10 s … +1 s (`BAD_TIME`, counted as `telemetry(bad-time)`); `EpochMapper` re-latches when the
+  sim clock jumps back > 1 s (Gazebo restart). Review: logic OK — `_px4_to_epoch_us` has one caller and it handles
+  `BAD_TIME`; `latch()` runs on every message so the re-latch triggers. Tests **24/24 OK** (needs `pillow`).
+  → fixes `merge_status.md` problem 7 (negative `ts_us`). **Not deployed:** the running `aquarius-telemetry` image
+  (built 2026-11-14 before the merge) has no `plausible_time` → rebuild telemetry (cached up to the aquarius_bridge
+  COPY layer). Note: recreating telemetry alone once made PX4 segfault (2026-11-08 gotcha) → recreate px4-sim too.
+- **PR #2 AI template** (`Data-Pipeline/ai/`): consumer group `ai-detection` on `image-frames`, `fake[:N]` / YOLO
+  detector (`detect(image, meta=None)`, old 1-arg signature still works), message checked against
+  `detections.schema.json`, evidence `results/evidence/<drone>/<ts_us>_<frame>.jpg`, manual commits. Wiring OK:
+  topic `detections` created by kafka-init in both compose files, ingestion writes it to the `detections` table.
+  Tests **16/16 OK** (incl. the ingestion row builder with `PYTHONPATH=docker/ingestion`).
+  Review findings (not fixed — data / AI team's code, ask first):
+  1. **`--max-lag-s` (default 5) vs sim time (medium):** `too_old()` compares `ts_us` with the wall clock, but in the
+     sim `ts_us` = sim time + an offset taken once (`EpochMapper`). At RTF < 1 it falls behind the wall clock by
+     (1 − RTF) × elapsed → at RTF 0.9 every frame counts as "old" after ~50 s and nothing is detected. Real drones
+     are fine (ROS clock = UTC). Fix idea: measure lag with the Kafka message timestamp (`m.timestamp()`, producer
+     wall time) instead of `ts_us`, or `--max-lag-s 0` in the sim. Found by reading the code, not reproduced live.
+  2. **Schema error stops the service (low):** `validator.validate()` raises `ValidationError`, only
+     `KafkaException` is caught → one bad message (e.g. a detector returning NaN conf) ends the loop. Better: log +
+     count it as `bad`, skip the message.
+  Not tested: AI against live Kafka / camera frames (pipeline profile + camera model not running in this session).
+
+## Change log — Mission monitor / Path compare empty: pipeline was never started (2026-11-15)
+
+User: Mission monitor + Path compare dashboards don't work, suspected telemetry / DB writes broken.
+- **Cause:** not a bug in telemetry or ingestion. `docker/.env` had `TELEMETRY_PATH=both` but `COMPOSE_PROFILES=`
+  empty (both are the `.env.example` defaults; `init` sets the profile only with `--pipeline`, `aquarius path` sets
+  both). So Kafka / db-migrate / ingestion never ran → DB had only the Telegraf tables (`position`, `battery`, …),
+  none of the 12 pipeline tables those dashboards read (`telemetry`, `missions`, `flight_paths`, `persons`, …).
+  telemetry's log: `[kafka] waiting for Kafka kafka:19092 (compose profile pipeline) ...` for 31 h. Fleet dashboard
+  (Telegraf tables) was fine all along.
+- **Fix (no code change):** `aquarius pipeline on --build` → `COMPOSE_PROFILES=pipeline` in `.env`, kafka,
+  kafka-init (exit 0), db-migrate (exit 0, 0001–0008 applied), ingestion + imagestream built and started, kafka-ui;
+  px4-sim / telemetry **not** restarted. Bridge picked Kafka up by itself (`uav0..uav1`, sim_time, kafka errors 0).
+- **Verified:** `telemetry` table rows for uav0 + uav1, `ts` ≈ `now()` − 0.1 s, 0 `ingest_rejects`; all 17 Mission
+  monitor + 5 Path compare panel queries OK via Grafana `/api/ds/query` (vars: newest mission, swath 30). Empty but
+  expected: coverage, search area, planned paths, survivor pins, ground truth (P2 / P3 / P7 don't write them yet).
+  Not checked: dashboards by eye in a browser, a flight with the pipeline on, PR #1 bridge (image not rebuilt).
+- **Suggestion (not done):** `.env.example` defaults are inconsistent (`both` without the profile) → either make
+  `init` set `COMPOSE_PROFILES=pipeline` when `TELEMETRY_PATH` ≠ `mqtt`, or warn in `init` / `status`.
+
+## Change log — ROS check: Kafka bridge subscribed to a dead topic (vehicle_status_v4) (2026-11-15)
+
+User asked whether ROS in compose works. All compose services run (`db-migrate` / `kafka-init` = one-shot, exit 0);
+ROS 2 lives in `telemetry` (XRCE agent, ros_gz_bridge, web_video_server, ground_truth, aquarius_bridge) and
+`drone-control`; both see the 125 topics. **Bug found:** PX4 `main` `0bd95058` publishes `vehicle_status_v5`, the
+bridge subscribed to hard-coded `fmu/out/vehicle_status_v4` (0 publishers) → `nav_state` / `armed` **null in all
+21 615 Kafka telemetry rows per drone** (Mission monitor drone status had no mode / armed). Other 4 topics fine.
+- **Fix** (`Data-Pipeline/ros2_ws/src/aquarius_bridge`): `core.px4_topic(base, version)`; `bridge_node.py` topic
+  params default `""` = name from the built px4_msgs' `MESSAGE_VERSION` (px4_msgs is built from the same `PX4_REF`
+  as px4-sim, so it always matches; v0 = no suffix); a set name still overrides; resolved names logged in
+  `bridge up: … px4 topics=[…]`. `config/bridge.yaml` + `bridge_sitl.yaml` topic values → `""`. New unit test
+  `TestPx4Topic` → **25/25 OK**. v5 message still has `nav_state` / `arming_state` (same constants).
+- **Deployed:** `telemetry` rebuilt (3 min, bridge layer only; also brings PR #1's clock fix live) → log
+  `px4 topics=['battery_status_v1', 'vehicle_attitude', 'vehicle_global_position', 'vehicle_local_position_v1',
+  'vehicle_status_v5']`; new rows: `nav_state` AUTO_LOITER, `armed` false for uav0 + uav1 on every row, 0 rejects.
+- **Startup race found (not fixed):** recreating `px4-sim` **and** `telemetry` at the same moment
+  (`up -d --force-recreate --no-deps px4-sim telemetry`) → PX4 `gazebo already running world: baylands` → `Timed
+  out waiting for Gazebo world`, no gz server. Cause: `px4-rc.gzsim` decides "Gazebo running" from
+  `gz topic -l | grep /world/.*/clock`, and telemetry's ros_gz_bridge / ground_truth.py (same netns + GZ_PARTITION)
+  had already *subscribed* to `/world/baylands/clock` → listed. Recovered: stop telemetry → restart px4-sim → wait
+  for `drone1 (sysid 2)` → recreate telemetry. Timing-dependent (`init` worked); `aquarius drones N` recreates both
+  together too. Suggested fix: telemetry entrypoint waits until the service `/world/$PX4_GZ_WORLD/scene/info`
+  exists (only the real server offers it) before starting the gz bridge / ground_truth.
+
+## Change log — Mission monitor re-check: Kafka OK, map basemap broken (2026-11-15)
+
+User: Mission monitor (Kafka dashboard) still "not working", asked to re-check Kafka and its data.
+- **Kafka / data: healthy.** Topics telemetry / image-frames / detections / survivors / replanning-events exist;
+  bridge `[stats] telemetry=200 | kafka errors=0` per 10 s (2 drones × 10 Hz, partitions 3 + 7); consumer group
+  `db-ingestion` lag 3; ingestion ~200 rows / 10 s; `telemetry` table: uav0 / uav1 rows up to `now()`, `nav_state` +
+  `armed` filled on every row of the current mission (`1bfcb3d3…`), 0 `ingest_rejects`. `image-frames` = 0 msgs
+  (no camera model, `gz_x500`) → camera panel "waiting for images" is expected.
+- **Rendered the dashboard** (headless Chrome via CDP, scratchpad script; needs `Emulation.setDeviceMetricsOverride`,
+  else Grafana lazy-loads nothing): stats, drone status table, battery, altitude, pipeline health all filled.
+  **Bug: the mission map showed "API KEY REQUIRED" tiles** — the panel used Grafana's `default` basemap (CARTO), which
+  now needs a key. **Fix:** `docker/grafana/build_dashboards.py` basemap → Esri World Imagery xyz (same as Fleet),
+  regenerated `dashboards/mission.json` (only that diff — generator was in sync), `aquarius-grafana` rebuilt +
+  recreated → satellite map of Baylands with the drone markers. Compare dashboard has no geomap.
+- Side effect: `compose up -d --build grafana` also **recreated `timescaledb`** (container config was stale since
+  the `TSDB_PORT` change) → volume kept, ingestion lost its connection, restarted and caught up by itself
+  (short latency spike on the D3 panel). Use `up -d --no-deps <svc>` to avoid this.
+- **Still empty, expected:** Coverage / survivor pins / detections (no `search_area`, no P6 / P7 output yet).
+- **Noted, not fixed:** (1) D3 "drone → DB latency" grows slowly (1.4 → 2.4 s over 30 min): `ts_us` = sim time +
+  one-time epoch offset (`EpochMapper`), sim runs slightly slower than wall clock → same root cause as the AI
+  `--max-lag-s` finding; real drones unaffected. (2) Old mission `dccf482c…` (pre-PR #1 bridge) has `first_ts`
+  1970-01-01 from a bad sample and null `nav_state` / `armed` — old data, can be deleted if it bothers the mission list.
+
+## Change log — Mission monitor: no mission → 0 / "not ready" instead of errors (2026-11-16)
+
+User: when there is no mission (or no data) the panels should show 0 or "not ready".
+- **Bug:** every query used `mission_id = '$mission'`; with no mission the variable is `''` → `invalid input syntax
+  for type uuid: ""` on **all 16 mission panels** (stats, map, tables, series). Checked in psql.
+- **Fix** (`docker/grafana/build_dashboards.py` → regenerated `dashboards/mission.json`): `M = NULLIF('$mission',
+  '')::uuid` → NULL → counts 0 / empty sets (all `aq_*` helpers take UUID and accept NULL). `panel()` sets
+  `fieldConfig.defaults.noValue` (default "ยังไม่มีข้อมูล"); stats default "0"; Coverage "ยังไม่พร้อม" (= no
+  `search_area` for the mission, explained in the panel description); drone status table "ไม่มีโดรนส่งข้อมูล";
+  survivor pins "ยังไม่พบผู้ประสบภัย". Path compare has no `$mission` → unchanged.
+- **Verified:** `aquarius-grafana` rebuilt, `up -d --no-deps grafana`; all 17 panel queries via `/api/ds/query`:
+  current mission 17 OK / 0 errors, empty mission 17 OK / 0 errors (13 empty → noValue texts). Screenshot: Coverage
+  "ยังไม่พร้อม", pins "ยังไม่พบผู้ประสบภัย", rest live.
+- Seen again: D3 latency stuck at ~6.3 s after the image build (Kafka lag 5 msgs, ingestion keeps up) — the CPU-heavy
+  build slowed the sim, and `EpochMapper` keeps its one-time offset, so sim-time `ts` stays ~5 s behind wall clock
+  until the bridge restarts. Sim-only (see 2026-11-15 note); possible fix = bridge re-latches the epoch when drift > N s.
+
+## Change log — Kafka carries the MQTT data too: landed / GPS / health + camera (2026-11-16)
+
+User: Gazebo data should go both ways (MQTT and Kafka) with the same data. Before: Kafka `telemetry` had position /
+attitude / velocity / battery / mode / armed only; MQTT also has landed, GPS, health, mission progress, events;
+`image-frames` empty (no camera model).
+- **Schema** `Data-Pipeline/schemas/telemetry.schema.json`: new **optional, nullable** fields `landed`,
+  `gps_fix_type`, `gps_satellites`, `gps_eph`, `gps_epv`, `health_ok`, `failsafe_flags` (string array);
+  `schema_version` stays 1, older messages stay valid (tested). Data team's contract → tell them.
+- **Bridge** (`aquarius_bridge`): subscribes PX4 `vehicle_land_detected`, `vehicle_gnss` (`receiver.fix_type /
+  satellites_used / eph / epv`, 30 Hz), `failsafe_flags` (names from px4_msgs, same `px4_topic()` versioning; params
+  `topic_land_detected / topic_gnss / topic_failsafe`, YAMLs updated). `failsafe_flags` = every true bool;
+  `health_ok` = none of the critical ones (attitude / position / altitude / velocity invalid, gnss_lost,
+  battery_unhealthy, fd_*) — situations like no mission / RC / GCS lost are listed but don't count (normal on the
+  ground in SITL). NaN / negative accuracy → null. Tests 28/28 (3 new).
+- **DB** migration `0009_telemetry_gps_health.sql`: 7 nullable columns + `aq_drone_status()` returns landed / GPS /
+  health (drop + create). **Ingestion** `rows.py` inserts them with `m.get()`; test 13/13 (1 new).
+- **Deploy order** (the schema has `additionalProperties: false`, so an old ingestion would reject new messages):
+  build ingestion / grafana / telemetry → `db-migrate` (0009 applied) → ingestion → then the new bridge.
+- **Camera:** `docker/.env` `PX4_SIM_MODEL=gz_x500_mono_cam_down`, `PX4_SYS_AUTOSTART=4014` (640x480 @ 10 Hz);
+  restarted in the safe order (stop telemetry → recreate px4-sim → wait for `drone1 (sysid 2)` → recreate telemetry,
+  no Gazebo race). Bridge already forwarded `/uav_i/camera/image_raw` → JPEG → `image-frames` at 2 fps per drone.
+  **RTF 0.89** averaged over 30 s with 2 cameras (single `real_time_factor` readings jump 0.1–1.0 — don't trust one).
+- **Grafana Mission monitor:** drone status table + columns บนพื้น / ดาวเทียม / สุขภาพ (OK green / FAULT red),
+  `minWidth 50` so the 10 columns fit; **D3 latency now `received_at − sent_at`** (wall clock both, 0008), falls
+  back to `ts` for old rows — with the camera's RTF 0.89 the old `received_at − ts` climbed 0 → 23 s in 3 min.
+- **Verified live:** bridge `px4 topics=[… failsafe_flags, vehicle_gnss, vehicle_land_detected …]`, `image-frames=37
+  telemetry=200` per 10 s, kafka errors 0; Kafka message has all new fields (landed true, fix 3, 10 sats, eph 0.9,
+  health_ok true); DB: every row of the last minute has landed / GPS / health (204 / 205 rows), 0 rejects;
+  imagestream + dashboard show both cameras; latency p50 ≈ 0.5 s, p95 ≈ 1 s.
+- **Still MQTT-only:** mission progress (waypoint i / n) and PX4 text events ("Landing detected") — PX4 does not
+  export `mission_result` / `mavlink_log` over uXRCE-DDS (not in the agent's `/fmu/out` list). Needs PX4
+  `src/modules/uxrce_dds_client/dds_topics.yaml` patched in the px4-sim image + rebuild, and a schema decision
+  (mission fields in telemetry; events = a new Kafka topic?) with the data team.
+- Note: with RTF < 1 the sim-time `ts_us` falls behind wall clock faster now → the AI template's `--max-lag-s 5`
+  (2026-11-15 finding) will drop frames after ~45 s; run it with `--max-lag-s 0` in the sim until fixed.
+
+## Change log — Mission monitor: battery / GPS / health section like Fleet (2026-11-16)
+
+User: the Kafka dashboard should show battery and GPS status like the MQTT (Fleet) one. Mission monitor had only
+battery % (series + table column); no GPS / health panels.
+- `docker/grafana/build_dashboards.py` → new row **"แบตเตอรี่ · GPS · สุขภาพ (จาก Kafka)"** (before the cameras):
+  per-drone stats GPS fix (1 none red, 2 2D orange, 3 3D / 4 DGPS / 5-6 RTK green, 8 extrapolated orange),
+  GPS satellites (< 4 red, < 6 orange), health OK / FAULT, on ground / flying; series battery voltage, GPS
+  satellites, GPS eph + epv; table of active PX4 failsafe flags. Helper `per_drone_stat()` reads
+  `aq_drone_status()` (newest row per drone, 0009 columns).
+- **Grafana gotcha:** stat with `values: true` + a renamed field: `reduceOptions.fields` is matched against the
+  display name, so `/^value$/` (and `/^uav/` with `${__data.fields.drone_id}`) showed "no data". Working pattern:
+  numeric value only (booleans `::int` → 1 / 0 + value mappings), `fields: ""` (numeric fields → the text drone_id
+  column is skipped), display name override `${__data.fields.drone_id}` on the `value` field.
+- Verified: grafana rebuilt (`up -d --no-deps grafana`), all 25 Mission panel queries OK with the current mission
+  and with no mission; screenshot: uav0 / uav1 3D, 10 sats, OK, บนพื้น; voltage 16.8 V; eph 0.9 m / epv 1.78 m;
+  flags table. Not in Kafka (so not on this dashboard): CPU load, mission progress, PX4 text events.
+
+## Change log — px4-sim rebuilt: CPU load, mission progress, PX4 text events on Kafka (2026-11-16)
+
+User asked to add the last MQTT-only data to Kafka and rebuild. PX4 did not publish `cpuload`, `mission_result`,
+`mavlink_log` over uXRCE-DDS (not in `dds_topics.yaml`), so this needed a px4-sim rebuild.
+- **px4-sim** (`docker/px4-sim/`): `dds_topics_extra.yaml` (cpuload 1 Hz, mission_result 5 Hz, mavlink_log) +
+  `patch_dds_topics.sh` (idempotent, inserts them at the end of `publications:`, checks 3 found); Dockerfile layer
+  **after** `make px4_sitl_default` → `RUN patch && make` (incremental). Build: apt / gz / clone layers CACHED (PX4
+  stays `0bd95058` = `PX4_REF`, so telemetry's px4_msgs still match), but the `make` layer re-ran in full (WORKDIR
+  not cached, 365 s), then patch + make, Baylands / QGC layers again, export 197 s → 12 GB. Engine stayed up.
+- **Bridge:** subscribes `cpuload`, `mission_result`, `mavlink_log` (version 0 → no suffix; params
+  `topic_cpuload / topic_mission_result / topic_mavlink_log`, YAMLs). telemetry gets optional `cpu_load` (%),
+  `mission_seq`, `mission_total` (0 = none), `mission_finished`. `mavlink_log` → **new Kafka topic `events`**
+  (`kafka_out.send_event`, QoS depth 10): `{schema_version, drone_id, mission_id, ts_us, severity 0-7, level, text}`;
+  `decode_px4_text()` handles char[127] as str / bytes / ints, NUL-terminated; ts = arrival on the bridge clock
+  (sim-time mapped, like telemetry). Tests 31/31 (3 new).
+- **Schemas:** `telemetry.schema.json` + 4 optional fields; new `events.schema.json`. **kafka-init** (local +
+  server compose) creates `events` (10 partitions, 30 days).
+- **DB** `0010_telemetry_cpu_mission_events.sql`: 4 telemetry columns, hypertable `events` (PK drone_id, ts, text;
+  index mission_id, ts), `aq_drone_status()` + cpu / mission (drop + create). **Ingestion** subscribes `events`
+  too (`JSON_TOPICS`), rows for both; tests 15/15 (2 new).
+- **Grafana Mission monitor:** row renamed "แบตเตอรี่ · GPS · สุขภาพ · ภารกิจ (จาก Kafka)": 6 status boxes (GPS fix,
+  sats, health, on ground, CPU %, mission % = (seq+1)/total, "ไม่มีภารกิจ" when none), PX4 events table (level
+  colours), waypoint series.
+- **Deploy order:** build images → kafka-init (topic `events`) → db-migrate (0010) → ingestion + grafana → stop
+  telemetry → recreate px4-sim (ready 129 s) → recreate telemetry. Bridge log `px4 topics=[… cpuload, mavlink_log,
+  mission_result …]`, `[stats] events=3 image-frames=15 telemetry=60`, kafka errors 0.
+- **Verified with a flight** (`aquarius start coverage --size 20x15 --drones 2`, PASSED): Kafka `events` had the
+  whole flight for both drones (Armed → Takeoff detected → Executing Mission → Mission finished → Return → Landing
+  detected → Disarmed by landing), same texts as the MQTT `event` table; telemetry mission_total 9, max seq 8,
+  finished true, CPU up to 96-100 % during flight; 0 rejects; dashboard screenshot shows all of it.
+- Notes: (1) PX4 logged "Accel #0 fail: TIMEOUT!" / "Preflight Fail" right after start on both paths — real PX4
+  warnings while the camera sim stalls at startup (RTF 0.83 after); drones were armable. (2) Kafka event times are
+  ~12-15 s behind MQTT's (sim-time ts drift, same as telemetry); a few repeated "Accel TIMEOUT" texts seen on MQTT
+  were missing on Kafka (best-effort DDS / PX4 uORB queue) — flight events all arrived. (3) Grafana logged 500
+  "database is locked" (its internal SQLite, sessions) with several tabs on 2 s refresh during the CPU-heavy
+  flight — transient, not the TimescaleDB queries. (4) **VM:** push the new `aquarius-px4-sim`, `aquarius-telemetry`,
+  `aquarius-ingestion`, `aquarius-grafana` images, then `aquarius update` (kafka-init + db-migrate run on up).
+- **Kafka now carries everything MQTT has** (position, attitude, battery, mode, armed, landed, GPS, health, CPU,
+  mission progress, PX4 texts) **plus camera images**.
+
+## Change log — compose.server / compose.control checked against compose.local (2026-11-17)
+
+User asked to bring `compose.server.yml` and `compose.control.yml` in line with `compose.local.yml` (local = base).
+Compared the resolved configs (`docker compose config --format json`, `COMPOSE_PROFILES=pipeline`) per service.
+- **Already in sync:** same services (server = local minus `drone-control`; control = `drone-control` only), same env
+  keys / defaults, images, profiles, healthchecks, depends_on; the inline `configs:` (mosquitto, telegraf,
+  timescaledb init, kafka topics incl. `events`) are identical. Every build context / file path exists.
+- **Remaining differences are on purpose** (host network on the VM): `127.0.0.1` instead of service names,
+  `KAFKA_LISTENERS` / controller on 127.0.0.1, DB `listen_addresses=127.0.0.1` + `port=${TSDB_PORT}`,
+  `PORT` / `SERVER_PORT` for imagestream / kafka-ui (no port mapping), novnc-qgc `--listen 8082`, `VNC_LISTEN`,
+  telemetry `ipc: host`, `restart: unless-stopped` on the always-on VM / control services, `CONTROL_HOST` required;
+  telemetry has no `depends_on … restart: true` (only needed for local's shared netns).
+- **Fixed (comments only):** kafka-init "5 topics" → 6 (both files); local header push example listed 4 images, the
+  VM also pulls timescaledb / ingestion / imagestream → explicit list of all 7 own images (`--profile pipeline`; a bare `push` would also try the third-party images).
+- `config -q` OK for all three files.
+
+## Change log — split test on one PC: compose.server + compose.control separately (2026-11-17)
+
+User asked to run server and control as separate stacks and fly from control to server. Same Windows PC, Docker
+Desktop 28.3.2 (host networking **not** enabled in Docker Desktop → `network_mode: host` = the Docker VM's network).
+No repo file changed; env files in the scratchpad (copies of `docker/.env`): server `CONTROL_HOST=10.35.21.101`
+(this PC's Wi-Fi IP, like a LAN control computer), `TSDB_PORT=5432`; control unchanged. Local stack `down` first
+(same container names; volumes kept), then `compose.server.yml --env-file … up -d` (project `aquarius-server`, fresh
+volumes) and `compose.control.yml --env-file … up -d` (`aquarius-control`). 2 drones, `gz_x500_mono_cam_down`, pipeline on.
+- px4-sim: `drone0 (sysid 1) -> 10.35.21.101:14540`, `drone1 … :14541`; `aquarius status --drone 0/1` from the control
+  container: HOLD, 100 %, FIX_3D 10 sats, armable.
+- **Problem 1 — duplicate path (Docker Desktop only):** drone-control got every PX4 message twice: from our link (via
+  Windows port forward) **and** from PX4's default link 14580+i → VM `localhost:14540+i`, which the control's published
+  port also catches because the server's host network is the same VM. → first coverage run failed in 8 s:
+  `upload_mission() PROTOCOL_ERROR`. A real VM has no such shortcut. Test fix: temporary rule in the Docker VM
+  `docker run --rm --net host --privileged alpine:3.20 sh -c "apk add -q iptables; iptables -I OUTPUT -o lo -p udp
+  --dport 14540:14549 -j DROP"` (gone after a Docker Desktop restart; remove with `-D` instead of `-I`). After it: one
+  source per drone, full rate.
+- **Problem 2 — Docker Desktop's Windows UDP forward dropped port 14540** twice (`netstat`: com.docker.backend still
+  bound 14541-14549, not 14540; `docker port` still listed it) → drone0 stuck at `connecting udpin://0.0.0.0:14540`.
+  Seems to happen while nothing in the container listens on the port and PX4 keeps sending (between scripts).
+  Fix: `up -d --force-recreate drone-control`, then start the mission right away. Docker Desktop (Windows) only; a
+  Linux control computer publishes with iptables.
+- **Result: `aquarius start coverage --size 40x30 --drones 2` PASSED over the split link**, exit 0, 143 s, both
+  landed, no leftover `mavsdk_server`, both Windows forwards still bound afterwards. Server side (last 5 min):
+  MQTT → Telegraf `position` 2263 / 2264 rows, max alt 20.1 / 23.1 m, separate lon bands; MQTT `event` + Kafka
+  `events` both have Armed → Takeoff → Executing Mission → Mission finished → Return → Landing → Disarmed for both;
+  Kafka → ingestion `telemetry` 2729 rows per drone, mission 28/29 + 26/27, finished true; bridge
+  `image-frames=38 telemetry=200 kafka errors=0`; 0 `ingest_rejects`; Grafana health ok; kafka-ui 8084 / imagestream
+  8090 / camera 8083 answer 200 (from inside the VM — not reachable from Windows without Docker Desktop host networking).
+- Left running: server + control stacks, iptables rule. Back to local: `docker compose -f compose.control.yml down`,
+  `docker compose -f compose.server.yml down`, `docker compose -f compose.local.yml up -d`.
+- Still open: real VM + separate control computer (and its firewall for udp 14540-14549), QGC on 14550 in split mode.
+
+## Change log — Grafana dashboard links use `HOST_IP` from `.env` (2026-11-17)
+
+User: on the server the dashboards' browser-side links point at `localhost` → should come from the host IP in `.env`.
+Grafana cannot read env vars inside dashboard JSON, so the image does it at start.
+- **`docker/grafana/start.sh`** (new, ENTRYPOINT of `aquarius-grafana`, then `exec /run.sh`): copies the dashboards
+  from `/usr/share/aquarius/dashboards` to `/etc/grafana/dashboards` on every start and replaces
+  `http://localhost:` with `http://$HOST_IP:` → Mission `stream_url` (imagestream 8090) and Fleet `cam` (camera 8083).
+  `HOST_IP` empty / `localhost` = unchanged. Dashboard JSON files and `build_dashboards.py` unchanged.
+- Dockerfile: dashboards → `/usr/share/aquarius/dashboards`, `/etc/grafana/dashboards` owned by 472, CRLF stripped
+  from the script. `compose.local.yml` / `compose.server.yml` grafana env `HOST_IP=${HOST_IP:-localhost}`;
+  `.env.example` `HOST_IP=localhost` ("CHANGE on the VM").
+- Verified: image built; `HOST_IP=192.168.1.20` → links `http://192.168.1.20:8083` / `:8090`; empty → localhost;
+  all 3 dashboards provisioned. Not done: push, VM `.env`, `aquarius urls` still adds `var-*` (harmless).
+- **Follow-up (same day): Kafka external address falls back to `HOST_IP`.** User asked to scan `docker/` code for
+  localhost / 127.0.0.1 and use `HOST_IP`. Only two kinds of address are used by other machines / browsers: the
+  dashboard links (above) and Kafka `EXTERNAL` → `KAFKA_ADVERTISED_LISTENERS EXTERNAL://${KAFKA_ADVERTISED_HOST:-${HOST_IP:-…}}:9092`
+  (local default localhost, server 127.0.0.1); `.env.example` `KAFKA_ADVERTISED_HOST=` (empty = HOST_IP). Tested with
+  `compose config`: none → localhost / 127.0.0.1, HOST_IP → HOST_IP, both set → KAFKA_ADVERTISED_HOST.
+  **Left on purpose:** every service-to-service 127.0.0.1 on the VM's host network (DB `listen_addresses`, Kafka
+  INTERNAL 19092 / controller, MQTT, TSDB DSNs, PX4 → telemetry 14700, uXRCE 8888, VNC_LISTEN, noVNC → VNC) — the host
+  IP would break them or expose the DB / VNC; code defaults (`localhost:9092` etc.) are overridden by compose;
+  `PX4_VIDEO_HOST_IP` is the video *target* (control computer), not this host; comments / docs unchanged.
+
+## Change log — dashboards: "Kafka" path renamed "uXRCE" (2026-11-18)
+
+User asked to rename Kafka → uXRCE in the dashboards (the path = PX4 uXRCE-DDS → ROS 2 → Kafka → ingestion).
+- `grafana/dashboards/compare.json` (hand-made): title "Path compare (MQTT vs uXRCE)", SQL path / stack label
+  `'Kafka'` → `'uXRCE'` (5 queries) **together with** the colour mappings (`"uXRCE": {…}`) and override regex
+  `.*uXRCE.*` (they match the label), descriptions "uXRCE stack". `build_dashboards.py` row "… ภารกิจ (จาก uXRCE)"
+  → regenerated `mission.json`.
+- Kept: real component names (Kafka topic `events` / `image-frames`, "bridge → Kafka → ingestion", CLI
+  `aquarius path mqtt|kafka|both`), camera title (camera is Gazebo → ROS 2, not uXRCE). Table names unchanged.
+- Verified: grafana rebuilt + recreated locally, 3 dashboards provisioned, new titles served. Not pushed.
+- Same session: user reported the MQTT path going down after ~20 min on the server (suspects Kafka / ROS 2
+  bandwidth). Not reproduced — no access to the VM; diagnosis commands given, waiting for logs.
+
+## Change log — Gazebo window on demand with HEADLESS=1 (2026-11-18, no code change)
+
+User wants to see the Gazebo GUI (watch drones, add "accidents") but the VM is overloaded (px4-sim 637 % of 8 cores,
+RTF ≈ 0.3 with GUI + QGC + 2 cameras). Tested locally (1 drone, `HEADLESS=1 QGC=0`, camera model):
+- Screen `:99` + x11vnc + noVNC run even with `HEADLESS=1` → the GUI can be opened / closed on the running sim:
+  `docker exec -d px4-sim bash -c '. /px4/build/px4_sitl_default/gz_env.sh; DISPLAY=:99 gz sim -g'` (noVNC 8080
+  local / 8081 VM), close: `docker exec px4-sim pkill -f "gz sim -g"` → server keeps running. Follow the drone:
+  `/gui/follow` with the model name `<model without gz_>_<i>` (e.g. `x500_mono_cam_down_0`) + `/gui/follow/offset`.
+- Obstacles / "accidents" without the GUI: `gz service -s /world/baylands/create` (EntityFactory with an SDF) →
+  red 1×1×3 m box appeared next to the drone; `/world/baylands/remove` to delete.
+- **Found: PX4 spawn can fail silently.** `px4-rc.gzsim` calls `/world/<w>/create` once (5 s timeout, output
+  discarded). This run: "Spawning Gazebo model" but no model in `gz model --list`, then `not found in scene/info` +
+  `Preflight Fail: No valid data from Accel 0 / barometer 0 missing` forever. Manual create with the same SDF fixed
+  it (PX4 → `home set`). Symptom to look for on the VM; fix = restart px4-sim or spawn by hand. Possible entrypoint
+  fix (not done): after rcS, check `gz model --list` and re-spawn.
+- Also: stopped split-test leftover containers (`aquarius-control` project) removed with `down` (no volumes).

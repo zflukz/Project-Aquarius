@@ -16,7 +16,9 @@ import os
 
 DS = {"type": "grafana-postgresql-datasource", "uid": "aquarius-tsdb"}
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboards")
-M = "'$mission'"
+# NULLIF: with no mission yet the variable is '' -> ''::uuid was an SQL error on every panel; NULL -> 0 / empty
+M = "NULLIF('$mission', '')::uuid"
+NO_DATA = "ยังไม่มีข้อมูล"   # shown instead of Grafana's "No data"
 
 
 def target(sql, ref="A", fmt="table"):
@@ -26,11 +28,13 @@ def target(sql, ref="A", fmt="table"):
 _id = [0]
 
 
-def panel(kind, title, x, y, w, h, targets, description="", **extra):
+def panel(kind, title, x, y, w, h, targets, description="", no_value=NO_DATA, **extra):
     _id[0] += 1
     p = {"id": _id[0], "type": kind, "title": title, "description": description, "datasource": DS,
          "gridPos": {"x": x, "y": y, "w": w, "h": h}, "targets": targets}
     p.update(extra)
+    if "fieldConfig" in p and no_value:
+        p["fieldConfig"]["defaults"].setdefault("noValue", no_value)
     return p
 
 
@@ -45,14 +49,33 @@ def thresholds(*steps):
     return {"mode": "absolute", "steps": [{"value": v, "color": c} for v, c in steps]}
 
 
-def stat(title, sql, x, y, w, unit="none", decimals=0, steps=None, description=""):
-    return panel("stat", title, x, y, w, 4, [target(sql)], description,
+def stat(title, sql, x, y, w, unit="none", decimals=0, steps=None, description="", no_value="0"):
+    return panel("stat", title, x, y, w, 4, [target(sql)], description, no_value=no_value,
                  fieldConfig={"defaults": {"unit": unit, "decimals": decimals,
                                            "color": {"mode": "thresholds"},
                                            "thresholds": steps or thresholds((None, "text"))},
                               "overrides": []},
                  options={"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
                           "colorMode": "value", "graphMode": "none", "textMode": "value",
+                          "justifyMode": "center", "orientation": "auto"})
+
+
+def per_drone_stat(title, column, x, y, w, mappings, description="", steps=None, unit="none", no_value="0"):
+    """One value per drone (newest row, aq_drone_status) with value -> text / colour mappings."""
+    opts = {str(v): {"text": t, "color": c, "index": i} for i, (v, t, c) in enumerate(mappings)}
+    defaults = {"color": {"mode": "thresholds"},
+                "thresholds": steps or thresholds((None, "text")), "decimals": 0, "unit": unit}
+    if opts:
+        defaults["mappings"] = [{"type": "value", "options": opts}]
+    return panel("stat", title, x, y, w, 4, [target(f"""
+SELECT drone_id, ({column})::int AS value
+  FROM aq_drone_status({M}, interval '1 hour') ORDER BY length(drone_id), drone_id""")], description,
+                 no_value=no_value,
+                 # fields "" = numeric fields only (drone_id is text) -> booleans come as 1 / 0 (::int)
+                 fieldConfig={"defaults": defaults,
+                              "overrides": [override("value", {"displayName": "${__data.fields.drone_id}"})]},
+                 options={"reduceOptions": {"calcs": [], "fields": "", "values": True},
+                          "colorMode": "value", "graphMode": "none", "textMode": "value_and_name",
                           "justifyMode": "center", "orientation": "auto"})
 
 
@@ -110,8 +133,9 @@ def mission_dashboard():
 SELECT c.coverage_pct
   FROM search_area a, aq_coverage(a.area_id, 'flown', $swath) c
  WHERE a.area_id = aq_current_area({M})""", 0, y, 5, unit="percent", decimals=1,
-        steps=thresholds((None, "orange"), (50, "yellow"), (90, "green")),
-        description="พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath"))
+        steps=thresholds((None, "orange"), (50, "yellow"), (90, "green")), no_value="ยังไม่พร้อม",
+        description="พื้นที่ที่แนวบินจริงผ่าน / พื้นที่ค้นหา (C4, aq_coverage) · ความกว้างกล้องตั้งที่ตัวแปร swath"
+                    " · \"ยังไม่พร้อม\" = ภารกิจนี้ยังไม่มีพื้นที่ค้นหา (search_area)"))
     P.append(stat("ผู้ประสบภัยที่พบ", f"""
 SELECT count(*) FROM persons WHERE mission_id = {M} AND status <> 'rejected'""", 5, y, 5,
         steps=thresholds((None, "text"), (1, "red")),
@@ -176,23 +200,34 @@ SELECT lat, lon, label FROM ground_truth_persons WHERE mission_id = {M}""", "F")
                                      "padding": 10, "maxZoom": 19},
                             "controls": {"showZoom": True, "mouseWheelZoom": True, "showAttribution": True,
                                          "showScale": True, "showMeasure": True},
-                            "basemap": {"type": "default", "name": "Basemap"},
+                            # Esri satellite like the Fleet map: Grafana's "default" basemap (CARTO) now shows
+                            # "API KEY REQUIRED" tiles without a key (seen 2026-11-15)
+                            "basemap": {"type": "xyz", "name": "Satellite", "config": {
+                                "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/"
+                                       "MapServer/tile/{z}/{y}/{x}",
+                                "attribution": "Tiles © Esri"}},
                             "layers": layers, "tooltip": {"mode": "details"}}))
 
     P.append(panel("table", "สถานะโดรน", 14, y, 10, 7, [target(f"""
 SELECT drone_id AS "โดรน", round(battery_pct) AS "แบต %", round(alt_rel::numeric, 1) AS "สูง (m)",
        round(speed_ms::numeric, 1) AS "เร็ว (m/s)", nav_state AS "โหมด", armed,
+       landed AS "บนพื้น", gps_satellites AS "ดาวเทียม", health_ok AS "สุขภาพ",
        round(age_s::numeric, 1) AS "ล่าสุด (s)"
   FROM aq_drone_status({M}, interval '1 hour')""")],
         "ค่าล่าสุดของแต่ละลำ (D1) · ล่าสุด (s) = วินาทีตั้งแต่ข้อมูลเข้าฐานข้อมูล เกิน 5 = สัญญาณหาย",
-        fieldConfig={"defaults": {"custom": {"align": "center"}},
+        no_value="ไม่มีโดรนส่งข้อมูล",
+        fieldConfig={"defaults": {"custom": {"align": "center", "minWidth": 50}},   # 10 columns fit (default 150)
                      "overrides": [
                          override("แบต %", {"custom.cellOptions": {"type": "color-background", "mode": "basic"},
                                             "color": {"mode": "thresholds"},
                                             "thresholds": thresholds((None, "red"), (20, "orange"), (40, "green"))}),
                          override("ล่าสุด (s)", {"custom.cellOptions": {"type": "color-text"},
                                                 "color": {"mode": "thresholds"},
-                                                "thresholds": thresholds((None, "green"), (5, "red"))})]},
+                                                "thresholds": thresholds((None, "green"), (5, "red"))}),
+                         override("สุขภาพ", {"custom.cellOptions": {"type": "color-text"},
+                                             "mappings": [{"type": "value", "options": {
+                                                 "true": {"text": "OK", "color": "green", "index": 0},
+                                                 "false": {"text": "FAULT", "color": "red", "index": 1}}}]})]},
         options={"showHeader": True, "cellHeight": "sm"}))
     P.append(timeseries("แบตเตอรี่", f"""
 SELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_remaining) * 100 AS "แบต %"
@@ -210,8 +245,82 @@ SELECT left(person_id::text, 8) AS "หมุด", status AS "สถานะ", 
        first_ts AS "พบครั้งแรก", last_ts AS "เห็นล่าสุด", best_snapshot AS "ภาพหลักฐาน"
   FROM survivor_pins WHERE mission_id = {M} ORDER BY first_ts""")],
         "เปลี่ยนสถานะ: UPDATE persons SET status = 'confirmed' WHERE person_id = ... (หน้าจอยืนยันอยู่ใน Phase E)",
+        no_value="ยังไม่พบผู้ประสบภัย",
         fieldConfig={"defaults": {}, "overrides": []}, options={"showHeader": True, "cellHeight": "sm"}))
     y += 6
+
+    # -- power, GPS, health (same as the Fleet / MQTT section; Kafka fields since 2026-11-16) ------------
+    P.append(row("แบตเตอรี่ · GPS · สุขภาพ · ภารกิจ (จาก uXRCE)", y)); y += 1
+    P.append(per_drone_stat("GPS fix", "gps_fix_type", 0, y, 4,
+        [(1, "ไม่มี fix", "red"), (2, "2D", "orange"), (3, "3D", "green"), (4, "DGPS", "green"),
+         (5, "RTK float", "green"), (6, "RTK fixed", "green"), (8, "ประมาณค่า", "orange")],
+        "PX4 vehicle_gnss fix ของแต่ละลำ (ค่าล่าสุด)"))
+    P.append(per_drone_stat("ดาวเทียม GPS", "gps_satellites", 4, y, 4, [],
+        "จำนวนดาวเทียมที่ใช้ (ค่าล่าสุด) · น้อยกว่า 6 = เหลือง น้อยกว่า 4 = แดง",
+        steps=thresholds((None, "red"), (4, "orange"), (6, "green"))))
+    P.append(per_drone_stat("สุขภาพ", "health_ok", 8, y, 4,
+        [(1, "OK", "green"), (0, "FAULT", "red")],
+        "FAULT = มี failsafe flag ร้ายแรงของ PX4 (attitude / position / altitude / velocity invalid, GNSS lost, "
+        "แบตเสีย, failure detector) · รายชื่อ flag อยู่ในตารางด้านล่าง"))
+    P.append(per_drone_stat("บนพื้น / บิน", "landed", 12, y, 4,
+        [(1, "บนพื้น", "blue"), (0, "กำลังบิน", "green")], "PX4 vehicle_land_detected.landed"))
+    P.append(per_drone_stat("CPU (PX4)", "round(cpu_load)", 16, y, 4, [],
+        "PX4 cpuload (%) · เกิน 80 = แดง", steps=thresholds((None, "green"), (60, "orange"), (80, "red")),
+        unit="percent"))
+    P.append(per_drone_stat("ภารกิจ", "CASE WHEN mission_total > 0 THEN round(100.0 * (mission_seq + 1) / "
+                            "mission_total) END", 20, y, 4, [],
+        "waypoint ปัจจุบัน / ทั้งหมด ของภารกิจที่อัปโหลด (PX4 mission_result) · ว่าง = ไม่มีภารกิจ",
+        unit="percent", no_value="ไม่มีภารกิจ"))
+    y += 4
+    P.append(timeseries("แรงดันแบตเตอรี่", f"""
+SELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, avg(battery_voltage) AS "V"
+  FROM telemetry WHERE mission_id = {M} AND $__timeFilter(ts) AND battery_voltage IS NOT NULL
+ GROUP BY 1, drone_id ORDER BY 1""", 0, y, 8, 7, "volt", "battery_status voltage_v"))
+    P.append(timeseries("ดาวเทียม GPS", f"""
+SELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, max(gps_satellites) AS "ดวง"
+  FROM telemetry WHERE mission_id = {M} AND $__timeFilter(ts) AND gps_satellites IS NOT NULL
+ GROUP BY 1, drone_id ORDER BY 1""", 8, y, 8, 7, "none", "satellites_used", 0))
+    P.append(timeseries("ความแม่นยำ GPS (eph / epv)", f"""
+SELECT $__timeGroupAlias(ts, '2s'), drone_id || ' eph' AS metric, avg(gps_eph) AS "m"
+  FROM telemetry WHERE mission_id = {M} AND $__timeFilter(ts) AND gps_eph IS NOT NULL GROUP BY 1, drone_id
+UNION ALL
+SELECT $__timeGroupAlias(ts, '2s'), drone_id || ' epv' AS metric, avg(gps_epv) AS "m"
+  FROM telemetry WHERE mission_id = {M} AND $__timeFilter(ts) AND gps_epv IS NOT NULL GROUP BY 1, drone_id
+ ORDER BY 1""", 16, y, 8, 7, "lengthm", "eph = แนวนอน, epv = แนวตั้ง (เมตร) · ยิ่งน้อยยิ่งแม่น", 0))
+    y += 7
+    P.append(panel("table", "failsafe flags ที่ทำงานอยู่", 0, y, 24, 4, [target(f"""
+SELECT drone_id AS "โดรน", CASE WHEN health_ok THEN 'OK' WHEN health_ok = false THEN 'FAULT' END AS "สุขภาพ",
+       coalesce(array_to_string(failsafe_flags, ', '), '-') AS "flags (PX4 failsafe_flags)"
+  FROM aq_drone_status({M}, interval '1 hour')""")],
+        "flag ที่เป็นจริงตอนนี้ · บนพื้นใน SITL ปกติจะเห็น auto_mission_missing / manual_control_signal_lost / "
+        "offboard_control_signal_lost — ไม่ใช่ความผิดปกติ",
+        no_value="ไม่มีโดรนส่งข้อมูล",
+        fieldConfig={"defaults": {}, "overrides": [
+            override("สุขภาพ", {"custom.cellOptions": {"type": "color-text"}, "mappings": [
+                {"type": "value", "options": {"OK": {"color": "green", "index": 0},
+                                              "FAULT": {"color": "red", "index": 1}}}]}),
+            override("โดรน", {"custom.width": 90}), override("สุขภาพ", {"custom.width": 90})]},
+        options={"showHeader": True, "cellHeight": "sm"}))
+    y += 4
+    P.append(panel("table", "ข้อความจาก PX4 (events)", 0, y, 12, 8, [target(f"""
+SELECT ts AS "เวลา", drone_id AS "โดรน", level AS "ระดับ", text AS "ข้อความ"
+  FROM events WHERE mission_id = {M} AND $__timeFilter(ts)
+ ORDER BY ts DESC LIMIT 200""")],
+        "PX4 mavlink_log (= STATUSTEXT ของฝั่ง MQTT) ผ่าน Kafka topic events · เช่น Takeoff / Landing detected, failsafe",
+        no_value="ยังไม่มีข้อความ",
+        fieldConfig={"defaults": {}, "overrides": [
+            override("ระดับ", {"custom.width": 90, "custom.cellOptions": {"type": "color-text"}, "mappings": [
+                {"type": "value", "options": {
+                    **{lv: {"color": "red", "index": i} for i, lv in enumerate(("emergency", "alert", "critical", "error"))},
+                    "warning": {"color": "orange", "index": 4}, "notice": {"color": "blue", "index": 5},
+                    "info": {"color": "text", "index": 6}, "debug": {"color": "#8e8e8e", "index": 7}}}]}),
+            override("โดรน", {"custom.width": 70}), override("เวลา", {"custom.width": 170})]},
+        options={"showHeader": True, "cellHeight": "sm"}))
+    P.append(timeseries("waypoint ของภารกิจ", f"""
+SELECT $__timeGroupAlias(ts, '2s'), drone_id AS metric, max(mission_seq + 1) AS "waypoint"
+  FROM telemetry WHERE mission_id = {M} AND $__timeFilter(ts) AND mission_total > 0
+ GROUP BY 1, drone_id ORDER BY 1""", 12, y, 12, 8, "none", "waypoint ปัจจุบัน (1 = จุดแรก) ของแต่ละลำ", 0))
+    y += 8
 
     # -- cameras --------------------------------------------------------------------------
     P.append(row("กล้อง (สด จาก Kafka image-frames)", y)); y += 1
@@ -227,11 +336,12 @@ SELECT left(person_id::text, 8) AS "หมุด", status AS "สถานะ", 
     P.append(row("สุขภาพ pipeline (D3)", y)); y += 1
     P.append(timeseries("ความหน่วงโดรน → ฐานข้อมูล", f"""
 SELECT $__timeGroupAlias(received_at, '10s'),
-       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS "p50",
-       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - ts) * 1000) AS "p95"
+       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - coalesce(sent_at, ts)) * 1000) AS "p50",
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - coalesce(sent_at, ts)) * 1000) AS "p95"
   FROM telemetry WHERE mission_id = {M} AND $__timeFilter(received_at)
  GROUP BY 1 ORDER BY 1""", 0, y, 12, 7, "ms",
-        "received_at − ts ของ telemetry ทุก 10 วินาที · เชื่อได้เมื่อนาฬิกาตรงกัน (โดรนจริง + chrony หรือ Gazebo ที่ RTF ≈ 1)"))
+        "received_at − sent_at ของ telemetry ทุก 10 วินาที (bridge → Kafka → ingestion → ฐานข้อมูล, นาฬิกาจริงทั้งคู่ 0008)"
+        " · ไม่ใช้ ts เพราะใน Gazebo ts เป็นเวลา sim ที่ช้ากว่านาฬิกาจริงเมื่อ RTF < 1 · แถวเก่าก่อน 0008 ใช้ ts"))
     P.append(timeseries("telemetry ที่เข้าฐานข้อมูลต่อลำ", f"""
 SELECT $__timeGroupAlias(received_at, '10s'), drone_id AS metric, count(*) / 10.0 AS "Hz"
   FROM telemetry WHERE mission_id = {M} AND $__timeFilter(received_at)

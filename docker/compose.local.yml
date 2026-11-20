@@ -5,7 +5,7 @@
 #   docker compose -f compose.local.yml up -d --build          # run all locally
 #   docker compose -f compose.local.yml exec drone-control \
 #     bash -c "source /opt/ros/jazzy/setup.bash && python3 flight_test.py"
-#   docker compose -f compose.local.yml push px4-sim telemetry grafana drone-control   # publish for the VM
+#   docker compose -f compose.local.yml --profile pipeline push px4-sim telemetry timescaledb grafana ingestion imagestream drone-control   # publish for the VM
 #
 # Dashboard: Grafana http://localhost:3000 (admin / GRAFANA_ADMIN_PASSWORD), camera http://localhost:8083/
 #   PX4 MAVLink -> telemetry (mavlink_mqtt.py) -> mosquitto -> telegraf -> timescaledb -> grafana
@@ -194,6 +194,7 @@ services:
       - "3000:3000"                         # dashboard: http://localhost:3000
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - HOST_IP=${HOST_IP:-localhost}          # dashboard camera / imagestream links (browser side)
       - TSDB_HOST=timescaledb:5432
       - TSDB_PASSWORD=${TSDB_PASSWORD:-aquarius-admin}
     volumes:
@@ -220,7 +221,7 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       # INTERNAL = other containers (kafka:19092), EXTERNAL = the host / other machines (KAFKA_ADVERTISED_HOST:9092)
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://${KAFKA_ADVERTISED_HOST:-localhost}:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://${KAFKA_ADVERTISED_HOST:-${HOST_IP:-localhost}}:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1         # single broker: every replication factor is 1
@@ -240,7 +241,7 @@ services:
       retries: 20
     restart: unless-stopped
 
-  kafka-init:                               # creates the 5 topics (A3), then exits 0
+  kafka-init:                               # creates the 6 topics (A3 + events), then exits 0
     image: apache/kafka:3.8.0
     container_name: kafka-init
     profiles: [pipeline]
@@ -452,8 +453,10 @@ configs:
       create survivors         "$$PARTITIONS" "retention.ms=$$((30 * DAY_MS))"
       # One partition: keeps the order of events across all drones in a mission (A3)
       create replanning-events 1             "retention.ms=$$((30 * DAY_MS))"
+      # PX4 text messages (mavlink_log, "Landing detected", ...): a few per minute (2026-11-16)
+      create events            "$$PARTITIONS" "retention.ms=$$((30 * DAY_MS))"
 
       echo "Topics now on the broker:"
       "$$KT" --bootstrap-server "$$BOOTSTRAP" --describe \
-        --topic 'telemetry|image-frames|detections|survivors|replanning-events' \
+        --topic 'telemetry|image-frames|detections|survivors|replanning-events|events' \
         | grep -E '^Topic:' || true

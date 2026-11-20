@@ -10,7 +10,15 @@ ARG GRAFANA_VERSION=12.2.0
 FROM grafana/grafana:${GRAFANA_VERSION}
 
 COPY provisioning /etc/grafana/provisioning
-COPY dashboards/*.json /etc/grafana/dashboards/
+# dashboards are copied to /etc/grafana/dashboards by start.sh at every start, with
+# http://localhost:<port> replaced by HOST_IP (browser-side camera / imagestream links)
+COPY dashboards/*.json /usr/share/aquarius/dashboards/
+COPY --chmod=0755 start.sh /aquarius-start.sh
+USER root
+RUN sed -i 's/\r$//' /aquarius-start.sh \
+ && mkdir -p /etc/grafana/dashboards && chown 472:0 /etc/grafana/dashboards
+USER 472
+ENTRYPOINT ["/aquarius-start.sh"]
 
 # TSDB_* are read by provisioning/datasources/timescaledb.yml; set them in docker/compose.*.yml
 ENV TSDB_HOST=127.0.0.1:5432 \

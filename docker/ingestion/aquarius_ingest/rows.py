@@ -11,13 +11,16 @@ from jsonschema import Draft202012Validator
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 SUPPORTED_SCHEMA_VERSION = 1
-JSON_TOPICS = ("telemetry", "detections", "survivors", "replanning-events")
+JSON_TOPICS = ("telemetry", "detections", "survivors", "replanning-events", "events")
 
 SQL = {
     "telemetry": """
         INSERT INTO telemetry (ts, drone_id, mission_id, lat, lon, alt_amsl, alt_rel, q, vel_ned,
-                               battery_remaining, battery_voltage, nav_state, armed, sent_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                               battery_remaining, battery_voltage, nav_state, armed,
+                               landed, gps_fix_type, gps_satellites, gps_eph, gps_epv, health_ok,
+                               failsafe_flags, cpu_load, mission_seq, mission_total, mission_finished, sent_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s)
         ON CONFLICT DO NOTHING""",
     "detections": """
         INSERT INTO detections (ts, drone_id, frame_id, model_version, image_w, image_h, objects)
@@ -32,6 +35,10 @@ SQL = {
         INSERT INTO replanning_events (event_id, mission_id, ts, event_type, drone_id,
                                        battery_remaining, waypoints_reassigned, assigned_to)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING""",
+    "events": """
+        INSERT INTO events (ts, drone_id, mission_id, severity, level, text)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING""",
 }
 
@@ -127,7 +134,13 @@ def to_row(topic: str, m: Dict[str, Any], sent_at: Optional[datetime] = None) ->
     if topic == "telemetry":
         return (ts, m["drone_id"], m["mission_id"], m["lat"], m["lon"], m["alt_amsl"], m["alt_rel"],
                 m["q"], m["vel_ned"], m["battery_remaining"], m["battery_voltage"],
-                m["nav_state"], m["armed"], sent_at)
+                m["nav_state"], m["armed"],
+                # optional since 2026-11-16 (migration 0009): missing in older messages -> NULL
+                m.get("landed"), m.get("gps_fix_type"), m.get("gps_satellites"), m.get("gps_eph"),
+                m.get("gps_epv"), m.get("health_ok"), m.get("failsafe_flags"),
+                # optional since 2026-11-16 (migration 0010, px4-sim dds_topics patch)
+                m.get("cpu_load"), m.get("mission_seq"), m.get("mission_total"), m.get("mission_finished"),
+                sent_at)
     if topic == "detections":
         return (ts, m["drone_id"], m["frame_id"], m["model_version"], m["image_w"], m["image_h"],
                 json.dumps(m["objects"], separators=(",", ":")))
@@ -137,6 +150,8 @@ def to_row(topic: str, m: Dict[str, Any], sent_at: Optional[datetime] = None) ->
     if topic == "replanning-events":
         return (m["event_id"], m["mission_id"], ts, m["event_type"], m.get("drone_id"),
                 m.get("battery_remaining"), m.get("waypoints_reassigned"), m.get("assigned_to"))
+    if topic == "events":
+        return (ts, m["drone_id"], m["mission_id"], m["severity"], m["level"], m["text"])
     raise ValueError(f"unknown topic {topic}")
 
 

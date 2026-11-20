@@ -26,9 +26,16 @@ aquarius_bridge:
     image_input: "raw"
     jpeg_quality: 80
     px4_time_mode: "estimate_offset"
-    topic_global_position: "fmu/out/vehicle_global_position"
-    topic_local_position: "fmu/out/vehicle_local_position_v1"
-    topic_attitude: "fmu/out/vehicle_attitude"
-    topic_battery: "fmu/out/battery_status_v1"
-    topic_status: "fmu/out/vehicle_status_v4"
+    # "" = versioned PX4 topic name from the built px4_msgs (MESSAGE_VERSION), see bridge.yaml
+    topic_global_position: ""
+    topic_local_position: ""
+    topic_attitude: ""
+    topic_battery: ""
+    topic_status: ""
+    topic_land_detected: ""   # optional fields landed / GPS / health
+    topic_gnss: ""
+    topic_failsafe: ""
+    topic_cpuload: ""          # these three need the px4-sim dds_topics patch
+    topic_mission_result: ""
+    topic_mavlink_log: ""
     stats_period_s: 10.0

@@ -9,6 +9,7 @@ from confluent_kafka import KafkaException, Producer
 
 TOPIC_TELEMETRY = "telemetry"
 TOPIC_IMAGES = "image-frames"
+TOPIC_EVENTS = "events"          # PX4 text messages (2026-11-16)
 
 
 class KafkaOut:
@@ -54,6 +55,11 @@ class KafkaOut:
 
     def send_image(self, drone_id: str, jpeg: bytes, headers) -> bool:
         ok = self._send(TOPIC_IMAGES, drone_id, jpeg, headers)
+        self._p.poll(0)
+        return ok
+
+    def send_event(self, drone_id: str, value: bytes) -> bool:
+        ok = self._send(TOPIC_EVENTS, drone_id, value)
         self._p.poll(0)
         return ok
 

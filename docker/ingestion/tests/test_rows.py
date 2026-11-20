@@ -124,6 +124,35 @@ class TestTime(unittest.TestCase):
         row = to_row("telemetry", telemetry(), kafka_sent_at((1, 1_791_000_000_250)))
         self.assertEqual(row[-1].microsecond, 250_000)
 
+    def test_events_row(self):
+        m = {"schema_version": 1, "drone_id": "uav0", "mission_id": str(uuid.uuid4()),
+             "ts_us": 1_791_000_000_000_000, "severity": 6, "level": "info", "text": "Landing detected"}
+        row = to_row("events", decode("events", enc(m), V))
+        self.assertEqual(len(row), SQL["events"].count("%s"))
+        self.assertEqual(row[3:], (6, "info", "Landing detected"))
+        for bad in (dict(severity=9), dict(text=""), dict(level="loud")):
+            with self.assertRaises(Rejected):
+                decode("events", enc({**m, **bad}), V)
+
+    def test_telemetry_cpu_mission_fields(self):
+        row = to_row("telemetry", decode("telemetry", enc(telemetry()), V))
+        self.assertEqual(row[20:24], (None,) * 4)
+        m = telemetry(cpu_load=46.0, mission_seq=3, mission_total=14, mission_finished=False)
+        row = to_row("telemetry", decode("telemetry", enc(m), V))
+        self.assertEqual(row[20:24], (46.0, 3, 14, False))
+
+    def test_telemetry_optional_fields(self):
+        # older bridge: fields missing -> NULL columns
+        row = to_row("telemetry", decode("telemetry", enc(telemetry()), V))
+        self.assertEqual(row[13:20], (None,) * 7)
+        m = telemetry(landed=True, gps_fix_type=3, gps_satellites=10, gps_eph=0.7, gps_epv=1.1,
+                      health_ok=True, failsafe_flags=["home_position_invalid"])
+        row = to_row("telemetry", decode("telemetry", enc(m), V))
+        self.assertEqual(row[13:20], (True, 3, 10, 0.7, 1.1, True, ["home_position_invalid"]))
+        for bad in (dict(gps_satellites=-1), dict(landed="yes"), dict(failsafe_flags=["Bad Name"])):
+            with self.assertRaises(Rejected):
+                decode("telemetry", enc(telemetry(**bad)), V)
+
 
 if __name__ == "__main__":
     unittest.main()

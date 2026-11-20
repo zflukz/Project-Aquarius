@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aquarius.local/schemas/events.schema.json",
+  "title": "events",
+  "description": "Bridge -> Kafka: PX4 text messages (uORB mavlink_log = the STATUSTEXT of the MQTT path), e.g. 'Takeoff detected', 'Landing detected', failsafe warnings. Added 2026-11-16.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "drone_id",
+    "mission_id",
+    "ts_us",
+    "severity",
+    "level",
+    "text"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "drone_id": {
+      "type": "string",
+      "pattern": "^uav[0-9]+$"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "ts_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch microseconds, when the bridge received it (A4 clock)"
+    },
+    "severity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 7,
+      "description": "syslog level: 0 emergency ... 7 debug"
+    },
+    "level": {
+      "enum": [
+        "emergency",
+        "alert",
+        "critical",
+        "error",
+        "warning",
+        "notice",
+        "info",
+        "debug"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  }
+}

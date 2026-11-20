@@ -35,6 +35,12 @@ WORKDIR /px4
 # build SITL once in the image instead of on every new container
 RUN make px4_sitl_default
 
+# extra uXRCE-DDS topics (cpuload, mission_result, mavlink_log) for the Kafka path. Own layer AFTER the full
+# build: the cached clone / build above stay valid (PX4 commit must keep matching telemetry's PX4_REF) and
+# make only regenerates the uxrce_dds_client and relinks.
+COPY dds_topics_extra.yaml patch_dds_topics.sh /tmp/
+RUN bash /tmp/patch_dds_topics.sh && make px4_sitl_default
+
 # pre-cache Baylands terrain (see baylands_setup_guide.md) — Gazebo otherwise
 # downloads it silently on first launch and PX4 hangs on "Waiting for Gazebo world..."
 # non-fatal here: entrypoint.sh retries if the cache is still empty at runtime

@@ -104,7 +104,7 @@ Change log entry: `CLAUDE.md` → "Change log — data pipeline merged into dock
    more likely with the pipeline starting at the same time on a loaded PC.
 7. 2 rows in `ingest_rejects` from the first session: `ts_us` negative (-7 s / -75 s) — the bridge's time mapping
    before its PX4 offset settled. Rejected by the schema (no bad rows); none in the resumed session. Bridge-side
-   edge case, not investigated.
+   edge case. **Fixed in code 2026-11-15** (PR #1 `c0b90ac`: offset estimator needs 20 samples + clock-step reset, `plausible_time()` drops samples outside -10 s..+1 s); not yet re-tested live (telemetry image not rebuilt).
 
 ## Next
 

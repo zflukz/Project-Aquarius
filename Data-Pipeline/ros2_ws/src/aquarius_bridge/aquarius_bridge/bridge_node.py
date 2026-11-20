@@ -20,11 +20,12 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from sensor_msgs.msg import CompressedImage, Image
 
-from px4_msgs.msg import (BatteryStatus, VehicleAttitude, VehicleGlobalPosition,
-                          VehicleLocalPosition, VehicleStatus)
+from px4_msgs.msg import (BatteryStatus, Cpuload, FailsafeFlags, MavlinkLog, MissionResult, VehicleAttitude,
+                          VehicleGlobalPosition, VehicleGnss, VehicleLandDetected, VehicleLocalPosition,
+                          VehicleStatus)
 
-from .core import (ClockOffsetEstimator, plausible_time, Counters, DroneState, EpochMapper,
-                   RateLimiter, build_telemetry, encode_json, image_headers,
+from .core import (ClockOffsetEstimator, plausible_time, px4_topic, Counters, DroneState, EpochMapper,
+                   RateLimiter, build_event, build_telemetry, decode_px4_text, encode_json, image_headers,
                    is_jpeg, jpeg_dimensions, parse_drone_specs, stamp_to_us)
 from .kafka_out import KafkaOut
 
@@ -34,6 +35,10 @@ BAD_TIME = -1   # _px4_to_epoch_us: sample dropped because its mapped time is no
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                      durability=DurabilityPolicy.VOLATILE,
                      history=HistoryPolicy.KEEP_LAST, depth=5)
+# PX4 can emit several texts at once (its uORB queue for mavlink_log is 8)
+EVENT_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                       durability=DurabilityPolicy.VOLATILE,
+                       history=HistoryPolicy.KEEP_LAST, depth=10)
 CAMERA_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                         durability=DurabilityPolicy.VOLATILE,
                         history=HistoryPolicy.KEEP_LAST, depth=2)
@@ -51,14 +56,36 @@ class BridgeNode(Node):
         p("image_input", "compressed")          # compressed | raw
         p("jpeg_quality", 80)                   # only for image_input=raw
         p("px4_time_mode", "estimate_offset")   # estimate_offset | already_ros_time
-        p("topic_global_position", "fmu/out/vehicle_global_position")
-        p("topic_local_position", "fmu/out/vehicle_local_position_v1")
-        p("topic_attitude", "fmu/out/vehicle_attitude")
-        p("topic_battery", "fmu/out/battery_status_v1")
-        p("topic_status", "fmu/out/vehicle_status_v4")
+        # "" = derive the versioned name from the built px4_msgs (MESSAGE_VERSION), so it always matches the
+        # PX4 the messages were built from (PX4 main bumped vehicle_status_v4 -> _v5 in 2026-11; a fixed _v4
+        # subscribed to a topic nobody publishes -> nav_state / armed were null). Set a name to override.
+        p("topic_global_position", "")
+        p("topic_local_position", "")
+        p("topic_attitude", "")
+        p("topic_battery", "")
+        p("topic_status", "")
+        p("topic_land_detected", "")            # optional fields landed / GPS / health (2026-11-16)
+        p("topic_gnss", "")
+        p("topic_failsafe", "")
+        p("topic_cpuload", "")                  # these three need the px4-sim dds_topics patch (2026-11-16)
+        p("topic_mission_result", "")
+        p("topic_mavlink_log", "")
         p("stats_period_s", 10.0)
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.topics = {name: g(name) or px4_topic(base, getattr(cls, "MESSAGE_VERSION", 0))
+                  for name, base, cls in (
+                      ("topic_global_position", "vehicle_global_position", VehicleGlobalPosition),
+                      ("topic_local_position", "vehicle_local_position", VehicleLocalPosition),
+                      ("topic_attitude", "vehicle_attitude", VehicleAttitude),
+                      ("topic_battery", "battery_status", BatteryStatus),
+                      ("topic_status", "vehicle_status", VehicleStatus),
+                      ("topic_land_detected", "vehicle_land_detected", VehicleLandDetected),
+                      ("topic_gnss", "vehicle_gnss", VehicleGnss),
+                      ("topic_failsafe", "failsafe_flags", FailsafeFlags),
+                      ("topic_cpuload", "cpuload", Cpuload),
+                      ("topic_mission_result", "mission_result", MissionResult),
+                      ("topic_mavlink_log", "mavlink_log", MavlinkLog))}
         self.mission_id = g("mission_id") or str(uuid.uuid4())
         self.drones = parse_drone_specs(list(g("drones")))
         self.image_input = g("image_input")
@@ -81,7 +108,8 @@ class BridgeNode(Node):
         self.create_timer(float(g("stats_period_s")), self._log_stats)
         self.get_logger().info(
             f"bridge up: mission_id={self.mission_id} drones={[d.drone_id for d in self.drones]} "
-            f"sim_time={use_sim_time} kafka={g('kafka_bootstrap')}")
+            f"sim_time={use_sim_time} kafka={g('kafka_bootstrap')} "
+            f"px4 topics={sorted(v.rsplit('/', 1)[-1] for v in self.topics.values())}")
 
     # -- subscriptions ------------------------------------------------------
     def _subscribe_drone(self, d):
@@ -89,7 +117,7 @@ class BridgeNode(Node):
         self.states[did] = DroneState()
         self.offsets[did] = ClockOffsetEstimator()
         self.frame_ids[did] = 0
-        t = lambda name: f"{ns}/{self.get_parameter(name).value}"  # noqa: E731
+        t = lambda name: f"{ns}/{self.topics[name]}"  # noqa: E731
 
         self.create_subscription(VehicleGlobalPosition, t("topic_global_position"),
                                  lambda m, did=did: self._on_global(did, m), PX4_QOS)
@@ -101,6 +129,19 @@ class BridgeNode(Node):
                                  lambda m, did=did: self._on_battery(did, m), PX4_QOS)
         self.create_subscription(VehicleStatus, t("topic_status"),
                                  lambda m, did=did: self._on_status(did, m), PX4_QOS)
+        self.create_subscription(VehicleLandDetected, t("topic_land_detected"),
+                                 lambda m, did=did: self.states[did].update_land(m.landed), PX4_QOS)
+        self.create_subscription(VehicleGnss, t("topic_gnss"),
+                                 lambda m, did=did: self._on_gnss(did, m), PX4_QOS)
+        self.create_subscription(FailsafeFlags, t("topic_failsafe"),
+                                 lambda m, did=did: self.states[did].update_failsafe(m), PX4_QOS)
+        self.create_subscription(Cpuload, t("topic_cpuload"),
+                                 lambda m, did=did: self.states[did].update_cpuload(m.load), PX4_QOS)
+        self.create_subscription(MissionResult, t("topic_mission_result"),
+                                 lambda m, did=did: self.states[did].update_mission(
+                                     m.seq_current, m.seq_total, m.finished), PX4_QOS)
+        self.create_subscription(MavlinkLog, t("topic_mavlink_log"),
+                                 lambda m, did=did: self._on_log(did, m), EVENT_QOS)
         if self.image_input == "raw":
             self.create_subscription(Image, d.camera_topic,
                                      lambda m, did=did: self._on_raw_image(did, m), CAMERA_QOS)
@@ -134,6 +175,22 @@ class BridgeNode(Node):
 
     def _on_status(self, did, m):
         self.states[did].update_status(m.nav_state, m.arming_state)
+
+    def _on_gnss(self, did, m):
+        r = m.receiver
+        self.states[did].update_gnss(r.fix_type, r.satellites_used, r.eph, r.epv)
+
+    def _on_log(self, did, m):
+        """PX4 text message -> Kafka events (time = arrival, on the same clock as telemetry)."""
+        now = self._ros_now_us()
+        ts_us = self.epoch.to_epoch_us(now) if self.epoch.ready else time.time_ns() // 1000
+        msg = build_event(did, self.mission_id, ts_us, m.severity, decode_px4_text(m.text))
+        if msg is None:
+            return
+        if self.kafka.send_event(did, encode_json(msg)):
+            self.counters.inc(self.counters.sent, "events")
+        else:
+            self.counters.inc(self.counters.dropped, "events")
 
     # -- telemetry ----------------------------------------------------------
     def _px4_to_epoch_us(self, did: str, px4_ts: int):

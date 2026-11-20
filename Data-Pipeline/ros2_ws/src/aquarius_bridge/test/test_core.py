@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 
-from aquarius_bridge.core import (ClockOffsetEstimator, DroneState, EpochMapper, plausible_time,  # noqa: E402
+from aquarius_bridge.core import (ClockOffsetEstimator, DroneState, EpochMapper, plausible_time, px4_topic,  # noqa: E402
                                   RateLimiter, build_telemetry, encode_json,
                                   image_headers, jpeg_dimensions, nav_state_name,
                                   parse_drone_specs, stamp_to_us)
@@ -133,6 +133,15 @@ class TestTime(unittest.TestCase):
         self.assertEqual(stamp_to_us(12, 345_678_999), 12_345_678)
 
 
+class TestPx4Topic(unittest.TestCase):
+    def test_versioned_names(self):
+        # names as PX4 main 0bd95058 publishes them (ros2 topic list, 2026-11-15)
+        self.assertEqual(px4_topic("vehicle_status", 5), "fmu/out/vehicle_status_v5")
+        self.assertEqual(px4_topic("battery_status", 1), "fmu/out/battery_status_v1")
+        self.assertEqual(px4_topic("vehicle_attitude", 0), "fmu/out/vehicle_attitude")
+        self.assertEqual(px4_topic("vehicle_global_position", None), "fmu/out/vehicle_global_position")
+
+
 class TestTelemetry(unittest.TestCase):
     def _state(self):
         st = DroneState()
@@ -185,6 +194,92 @@ class TestTelemetry(unittest.TestCase):
         st.update_local(z=float("nan"), vx=float("nan"), vy=0.0, vz=0.0)
         data = encode_json(build_telemetry("uav1", str(uuid.uuid4()), st, 1))
         self.assertNotIn(b"NaN", data)
+
+
+class TestOptionalFields(unittest.TestCase):
+    """landed / GPS / health (2026-11-16): null until received, schema-valid when set."""
+
+    class _Flags:   # stands in for px4_msgs FailsafeFlags (ROS classmethod get_fields_and_field_types)
+        @classmethod
+        def get_fields_and_field_types(cls):
+            return {"timestamp": "uint64", "mode_req_mission": "uint32", "attitude_invalid": "boolean",
+                    "home_position_invalid": "boolean", "gcs_connection_lost": "boolean",
+                    "battery_warning": "uint8"}
+
+        def __init__(self, **true_flags):
+            self.timestamp, self.mode_req_mission, self.battery_warning = 1, 7, 0
+            for n in ("attitude_invalid", "home_position_invalid", "gcs_connection_lost"):
+                setattr(self, n, true_flags.get(n, False))
+
+    def _state(self):
+        return TestTelemetry._state(self)
+
+    def test_null_until_received(self):
+        import jsonschema
+        msg = build_telemetry("uav0", str(uuid.uuid4()), self._state(), 1)
+        for k in ("landed", "gps_fix_type", "gps_satellites", "gps_eph", "gps_epv", "health_ok", "failsafe_flags"):
+            self.assertIn(k, msg)
+            self.assertIsNone(msg[k])
+        jsonschema.validate(msg, _schema("telemetry"))
+
+    def test_values_and_schema(self):
+        import jsonschema
+        st = self._state()
+        st.update_land(True)
+        st.update_gnss(3, 10, 0.7004, float("nan"))
+        st.update_failsafe(self._Flags(home_position_invalid=True, gcs_connection_lost=True))
+        msg = build_telemetry("uav0", str(uuid.uuid4()), st, 1)
+        jsonschema.validate(msg, _schema("telemetry"))
+        self.assertIs(msg["landed"], True)
+        self.assertEqual((msg["gps_fix_type"], msg["gps_satellites"], msg["gps_eph"], msg["gps_epv"]),
+                         (3, 10, 0.7, None))                       # NaN -> null
+        self.assertEqual(msg["failsafe_flags"], ["gcs_connection_lost", "home_position_invalid"])
+        self.assertIs(msg["health_ok"], True)                      # situations, not faults
+        st.update_failsafe(self._Flags(attitude_invalid=True))
+        self.assertIs(build_telemetry("uav0", str(uuid.uuid4()), st, 1)["health_ok"], False)
+
+    def test_old_message_without_new_fields_is_still_valid(self):
+        import jsonschema
+        msg = build_telemetry("uav0", str(uuid.uuid4()), self._state(), 1)
+        for k in ("landed", "gps_fix_type", "gps_satellites", "gps_eph", "gps_epv", "health_ok", "failsafe_flags"):
+            del msg[k]
+        jsonschema.validate(msg, _schema("telemetry"))
+
+
+class TestCpuMissionEvents(unittest.TestCase):
+    """cpuload / mission_result / mavlink_log (px4-sim dds_topics patch, 2026-11-16)."""
+
+    def test_cpu_and_mission_in_telemetry(self):
+        import jsonschema
+        st = TestTelemetry._state(self)
+        msg = build_telemetry("uav0", str(uuid.uuid4()), st, 1)
+        self.assertEqual([msg[k] for k in ("cpu_load", "mission_seq", "mission_total", "mission_finished")],
+                         [None] * 4)
+        st.update_cpuload(0.4567)
+        st.update_mission(3, 14, False)
+        msg = build_telemetry("uav0", str(uuid.uuid4()), st, 1)
+        jsonschema.validate(msg, _schema("telemetry"))
+        self.assertEqual((msg["cpu_load"], msg["mission_seq"], msg["mission_total"], msg["mission_finished"]),
+                         (45.7, 3, 14, False))
+        st.update_cpuload(float("nan"))
+        self.assertIsNone(build_telemetry("uav0", str(uuid.uuid4()), st, 1)["cpu_load"])
+
+    def test_decode_px4_text(self):
+        from aquarius_bridge.core import decode_px4_text
+        raw = list(b"Landing detected") + [0] * 5 + list(b"junk")
+        self.assertEqual(decode_px4_text(raw), "Landing detected")              # ints, NUL-terminated
+        self.assertEqual(decode_px4_text(bytes(raw)), "Landing detected")       # bytes
+        self.assertEqual(decode_px4_text([chr(c) for c in raw]), "Landing detected")  # 1-char strings
+        self.assertEqual(decode_px4_text([0] * 10), "")
+
+    def test_event_message(self):
+        import jsonschema
+        from aquarius_bridge.core import build_event
+        m = build_event("uav1", str(uuid.uuid4()), 1_791_000_000_000_000, 6, "Takeoff detected")
+        jsonschema.validate(m, _schema("events"))
+        self.assertEqual((m["severity"], m["level"], m["text"]), (6, "info", "Takeoff detected"))
+        self.assertEqual(build_event("uav1", str(uuid.uuid4()), 1, 12, "x")["level"], "debug")  # clamped
+        self.assertIsNone(build_event("uav1", str(uuid.uuid4()), 1, 6, ""))
 
 
 class TestImages(unittest.TestCase):

@@ -1,0 +1,13 @@
+# Extra PX4 uORB topics published over uXRCE-DDS (-> ROS 2 /fmu/out/*, then aquarius_bridge -> Kafka), so the
+# Kafka path carries what the MQTT path has (2026-11-16). Inserted at the end of the "publications:" list of
+# PX4's src/modules/uxrce_dds_client/dds_topics.yaml by the Dockerfile.
+  - topic: /fmu/out/cpuload
+    type: px4_msgs::msg::Cpuload
+    rate_limit: 1.
+
+  - topic: /fmu/out/mission_result
+    type: px4_msgs::msg::MissionResult
+    rate_limit: 5.
+
+  - topic: /fmu/out/mavlink_log
+    type: px4_msgs::msg::MavlinkLog

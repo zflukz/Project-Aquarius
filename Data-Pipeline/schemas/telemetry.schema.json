@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aquarius.local/schemas/telemetry.schema.json",
   "title": "telemetry",
-  "description": "Bridge -> Kafka, 10 Hz per drone (A2)",
+  "description": "Bridge -> Kafka, 10 Hz per drone (A2). Fields after 'armed' are optional (added 2026-11-16; schema_version stays 1)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -115,6 +115,142 @@
           "type": "null"
         }
       ]
+    },
+    "landed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PX4 vehicle_land_detected.landed (optional, 2026-11-16)"
+    },
+    "gps_fix_type": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PX4 vehicle_gnss receiver.fix_type: 1 none, 2 2D, 3 3D, 4 DGPS, 5 RTK float, 6 RTK fixed, 8 extrapolated (optional)"
+    },
+    "gps_satellites": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "satellites used (optional)"
+    },
+    "gps_eph": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "horizontal position accuracy [m] (optional)"
+    },
+    "gps_epv": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "vertical position accuracy [m] (optional)"
+    },
+    "health_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "false when a critical PX4 failsafe flag is set (attitude / position / altitude / velocity invalid, GNSS lost, battery unhealthy, failure detector) (optional)"
+    },
+    "failsafe_flags": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "maxItems": 64
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "names of the PX4 failsafe_flags booleans that are true right now, e.g. home_position_invalid (optional)"
+    },
+    "cpu_load": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PX4 cpuload.load in % (optional, needs the px4-sim dds_topics patch)"
+    },
+    "mission_seq": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PX4 mission_result.seq_current, 0-based (optional)"
+    },
+    "mission_total": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "items in the uploaded mission, 0 = none (optional)"
+    },
+    "mission_finished": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "PX4 mission_result.finished (optional)"
     }
   }
 }

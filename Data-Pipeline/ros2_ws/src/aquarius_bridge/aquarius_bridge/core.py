@@ -125,6 +125,13 @@ class ClockOffsetEstimator:
         return int(px4_ts_us) + self.offset_us
 
 
+def px4_topic(base: str, message_version: int) -> str:
+    """PX4 uXRCE-DDS topic name: fmu/out/<base>, plus _v<N> when the message's MESSAGE_VERSION is > 0
+    (e.g. vehicle_status v5 -> fmu/out/vehicle_status_v5, vehicle_attitude v0 -> fmu/out/vehicle_attitude)."""
+    v = int(message_version or 0)
+    return f"fmu/out/{base}_v{v}" if v > 0 else f"fmu/out/{base}"
+
+
 def plausible_time(sample_ros_us: int, ros_now_us: int,
                    max_age_us: int = 10_000_000, max_future_us: int = 1_000_000) -> bool:
     """A mapped sample time must lie between `max_age_us` ago and `max_future_us` ahead.
@@ -193,6 +200,18 @@ class DroneState:
     battery_voltage: Optional[float] = None
     nav_state: Optional[int] = None
     arming_state: Optional[int] = None
+    # optional fields (2026-11-16), so Kafka carries what the MQTT path has: landed / GPS / health
+    landed: Optional[bool] = None
+    gps_fix_type: Optional[int] = None
+    gps_satellites: Optional[int] = None
+    gps_eph: Optional[float] = None
+    gps_epv: Optional[float] = None
+    failsafe_flags: Optional[List[str]] = None
+    # need the px4-sim patch (docker/px4-sim/dds_topics_extra.yaml): cpuload, mission_result
+    cpu_load: Optional[float] = None         # %
+    mission_seq: Optional[int] = None        # current item (0-based)
+    mission_total: Optional[int] = None      # items in the uploaded mission (0 = none)
+    mission_finished: Optional[bool] = None
     last_sent_global_ts: Optional[int] = None
 
     def update_global(self, ts: int, lat: float, lon: float, alt: float) -> None:
@@ -213,6 +232,26 @@ class DroneState:
     def update_status(self, nav_state: int, arming_state: int) -> None:
         self.nav_state, self.arming_state = int(nav_state), int(arming_state)
 
+    def update_land(self, landed: bool) -> None:
+        self.landed = bool(landed)
+
+    def update_gnss(self, fix_type: int, satellites: int, eph: float, epv: float) -> None:
+        self.gps_fix_type, self.gps_satellites = int(fix_type), int(satellites)
+        self.gps_eph = _finite_nonneg(eph)
+        self.gps_epv = _finite_nonneg(epv)
+
+    def update_failsafe(self, msg) -> None:
+        """msg: px4_msgs FailsafeFlags (or any object with its bool attributes)."""
+        self.failsafe_flags = active_failsafe_flags(msg)
+
+    def update_cpuload(self, load: float) -> None:
+        load = _finite_nonneg(load)
+        self.cpu_load = None if load is None else round(min(load, 1.0) * 100, 1)
+
+    def update_mission(self, seq_current: int, seq_total: int, finished: bool) -> None:
+        self.mission_seq, self.mission_total = int(seq_current), int(seq_total)
+        self.mission_finished = bool(finished)
+
     def has_new_sample(self) -> bool:
         return (self.global_ts is not None and self.q is not None
                 and self.global_ts != self.last_sent_global_ts)
@@ -222,8 +261,38 @@ def _finite(x: Optional[float]) -> Optional[float]:
     return None if x is None or not math.isfinite(x) else x
 
 
+def _finite_nonneg(x: Optional[float]) -> Optional[float]:
+    x = None if x is None else float(x)
+    return None if x is None or not math.isfinite(x) or x < 0 else round(x, 3)
+
+
+# PX4 FailsafeFlags booleans that mean the drone itself is not healthy (-> health_ok = false).
+# The rest (no mission, GCS / RC lost, home invalid, geofence, ...) are situations, not faults,
+# and are normal on the ground in SITL; they are still listed in failsafe_flags.
+CRITICAL_FAILSAFE_FLAGS = frozenset({
+    "angular_velocity_invalid", "attitude_invalid", "local_altitude_invalid", "local_position_invalid",
+    "local_velocity_invalid", "global_position_invalid", "gnss_lost", "battery_unhealthy",
+    "fd_critical_failure", "fd_esc_arming_failure", "fd_imbalanced_prop", "fd_motor_failure",
+    "fd_motor_stuck_failure", "fd_alt_loss",
+})
+
+
+def active_failsafe_flags(msg) -> List[str]:
+    """Names of the true bool fields of a FailsafeFlags message (mode_req_* bitmasks etc. skipped)."""
+    fields = getattr(msg, "get_fields_and_field_types", None)   # ROS 2 message classes have it
+    if fields:
+        names = [n for n, t in fields().items() if t == "boolean"]
+    else:
+        names = [n for n in vars(msg) if not n.startswith("_")]
+    return sorted(n for n in names if getattr(msg, n, None) is True)
+
+
+def health_ok(flags: Optional[List[str]]) -> Optional[bool]:
+    return None if flags is None else not (set(flags) & CRITICAL_FAILSAFE_FLAGS)
+
+
 def build_telemetry(drone_id: str, mission_id: str, state: DroneState, ts_us: int) -> dict:
-    """One telemetry message, exactly the fields of the A2 table."""
+    """One telemetry message: the A2 table fields + the optional landed / GPS / health fields."""
     vel = state.vel_ned or (0.0, 0.0, 0.0)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -240,6 +309,52 @@ def build_telemetry(drone_id: str, mission_id: str, state: DroneState, ts_us: in
         "battery_voltage": state.battery_voltage,
         "nav_state": nav_state_name(state.nav_state),
         "armed": None if state.arming_state is None else state.arming_state == ARMING_STATE_ARMED,
+        # optional (2026-11-16): null until the PX4 topic has been received
+        "landed": state.landed,
+        "gps_fix_type": state.gps_fix_type,
+        "gps_satellites": state.gps_satellites,
+        "gps_eph": state.gps_eph,
+        "gps_epv": state.gps_epv,
+        "health_ok": health_ok(state.failsafe_flags),
+        "failsafe_flags": state.failsafe_flags,
+        "cpu_load": state.cpu_load,
+        "mission_seq": state.mission_seq,
+        "mission_total": state.mission_total,
+        "mission_finished": state.mission_finished,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Events: PX4 mavlink_log text (the STATUSTEXT the MQTT path shows) -> Kafka topic "events"
+# ---------------------------------------------------------------------------
+EVENT_LEVELS = ("emergency", "alert", "critical", "error", "warning", "notice", "info", "debug")
+
+
+def decode_px4_text(text) -> str:
+    """px4_msgs char[127] -> str. May arrive as str, bytes, ints or 1-char strings; NUL-terminated."""
+    if isinstance(text, str):
+        raw = text.encode("utf-8", "replace")
+    elif isinstance(text, (bytes, bytearray)):
+        raw = bytes(text)
+    else:
+        raw = b"".join(i.encode("latin-1", "replace") if isinstance(i, str) else bytes([int(i) & 0xFF])
+                       for i in text)
+    return raw.split(b"\x00", 1)[0].decode("utf-8", "replace").strip()
+
+
+def build_event(drone_id: str, mission_id: str, ts_us: int, severity: int, text: str) -> Optional[dict]:
+    """One events message; None for an empty text."""
+    if not text:
+        return None
+    sev = max(0, min(int(severity), 7))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "drone_id": drone_id,
+        "mission_id": mission_id,
+        "ts_us": int(ts_us),
+        "severity": sev,
+        "level": EVENT_LEVELS[sev],
+        "text": text[:200],
     }
 
 
