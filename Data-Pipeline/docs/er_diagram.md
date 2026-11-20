@@ -1,11 +1,11 @@
 # Aquarius — ER Diagram
 
-ตารางของ data pipeline ในฐานข้อมูล `aquarius` (PostgreSQL 17 + TimescaleDB + PostGIS) ตาม migration `0001`–`0008`
-ใน `docker/db/migrations/` (19 พ.ย. 2026) รายละเอียดทุกคอลัมน์, ฟังก์ชัน และ index อยู่ใน
+ตารางของ data pipeline ในฐานข้อมูล `aquarius` (PostgreSQL 17 + TimescaleDB + PostGIS) ตาม migration `0001`–`0010`
+ใน `docker/db/migrations/` (20 พ.ย. 2026) รายละเอียดทุกคอลัมน์, ฟังก์ชัน และ index อยู่ใน
 [`data_dictionary.md`](data_dictionary.md) ส่วนหน้าแบบ interactive อยู่ใน Claude artifact "Aquarius ER Diagram"
 
 - **เส้นทึบ** = foreign key จริงในฐานข้อมูล
-- **เส้นประ** = อ้างถึงกันจริง แต่ไม่มี constraint (`telemetry`, `detections` รับ 10 แถว/วินาทีต่อลำ จึงไม่มี FK
+- **เส้นประ** = อ้างถึงกันจริง แต่ไม่มี constraint (`telemetry`, `detections` รับ 10 แถว/วินาทีต่อลำ จึงไม่มี FK, `events` ก็ไม่มี FK เช่นกัน
   ingestion สร้างแถวใน `missions` / `drones` ให้ก่อนเขียนแทน)
 - ลบ mission แล้วตารางที่ผูกด้วย FK ถูกลบตาม (`ON DELETE CASCADE`) ยกเว้น `ground_truth_persons.mission_id` และ
   `survivors.person_id` ที่กลายเป็น NULL · `survivors.mission_id` และ `replanning_events.mission_id` เป็น FK
@@ -44,6 +44,17 @@ erDiagram
         real battery_voltage
         text nav_state
         boolean armed
+        boolean landed "0009"
+        smallint gps_fix_type "0009"
+        smallint gps_satellites "0009"
+        real gps_eph "0009"
+        real gps_epv "0009"
+        boolean health_ok "0009"
+        text failsafe_flags "TEXT[] 0009"
+        real cpu_load "0010"
+        int mission_seq "0010"
+        int mission_total "0010"
+        boolean mission_finished "0010"
         timestamptz sent_at "0008"
         timestamptz received_at
         geometry geom "Point 4326"
@@ -100,6 +111,15 @@ erDiagram
         real battery_remaining
         int waypoints_reassigned
         text assigned_to "TEXT[]"
+        timestamptz received_at
+    }
+    events {
+        timestamptz ts PK "bridge receive time, hypertable"
+        text drone_id PK
+        text text PK "max 200 chars"
+        uuid mission_id
+        smallint severity "0 emergency ... 7 debug"
+        text level
         timestamptz received_at
     }
     search_area {
@@ -160,6 +180,8 @@ erDiagram
     missions ||--o{ persons : "mission_id"
     persons ||..|| survivor_pins : "view of"
     missions |o--o{ replanning_events : "mission_id"
+    missions |o..o{ events : "mission_id"
+    drones ||..o{ events : "drone_id"
     missions ||--o{ search_area : "mission_id"
     search_area ||--o{ grid_cells : "area_id"
     missions ||--o{ flight_paths : "mission_id"

@@ -2,11 +2,11 @@
 
 2026-11-19 · Chayuthpong
 
-> Exported from the team's Claude Docs page "Aquarius — Data Dictionary" on 2026-11-19 (migrations `0001`–`0008`). Source of truth = `docker/db/migrations/`; update this file with every new migration. ER diagram: [`er_diagram.md`](er_diagram.md).
+> Exported from the team's Claude Docs page "Aquarius — Data Dictionary" on 2026-11-19, updated 2026-11-20 (migrations `0001`–`0010`). Source of truth = `docker/db/migrations/`; update this file with every new migration. ER diagram: [`er_diagram.md`](er_diagram.md).
 
 ## ภาพรวมและข้อตกลง
 
-ฐานข้อมูล `aquarius` (image `aquarius-timescaledb` = PostgreSQL 17 + TimescaleDB 2.22.1 + PostGIS 3.5, container `timescaledb` พอร์ต 5432 หรือ `TSDB_PORT`) มี 11 ตารางข้อมูล, 1 view, 2 ตารางระบบ และ 12 ฟังก์ชัน สร้างจาก migration `0001`–`0008` ใน `docker/db/migrations/` (0007 เพิ่มเฉพาะฟังก์ชันของ dashboard, 0008 เพิ่มคอลัมน์ `telemetry.sent_at` สำหรับวัด latency) เอกสารนี้ตรงกับ migration ชุดนั้น ถ้าเพิ่ม migration ใหม่ต้องแก้เอกสารนี้ด้วย
+ฐานข้อมูล `aquarius` (image `aquarius-timescaledb` = PostgreSQL 17 + TimescaleDB 2.22.1 + PostGIS 3.5, container `timescaledb` พอร์ต 5432 หรือ `TSDB_PORT`) มี 12 ตารางข้อมูล, 1 view, 2 ตารางระบบ และ 12 ฟังก์ชัน สร้างจาก migration `0001`–`0010` ใน `docker/db/migrations/` (0007 เพิ่มเฉพาะฟังก์ชันของ dashboard, 0008 เพิ่มคอลัมน์ `telemetry.sent_at` สำหรับวัด latency, 0009–0010 เพิ่มคอลัมน์ landed / GPS / health / CPU / mission ใน `telemetry` และตาราง `events` เพื่อให้ทาง Kafka มีข้อมูลเท่าทาง MQTT) เอกสารนี้ตรงกับ migration ชุดนั้น ถ้าเพิ่ม migration ใหม่ต้องแก้เอกสารนี้ด้วย
 
 ในฐานข้อมูลเดียวกันยังมีตารางของ Telegraf (ทาง MAVLink → MQTT ของ zflukz ที่ dashboard Fleet ใช้) อีก 9 ตาราง: `online`, `status`, `"position"`, `attitude`, `battery`, `gps`, `health`, `mission`, `event` ทุกตารางมี `time`, `fleet`, `drone` (เลข 0, 1, … เป็น text) + field ตาม message สร้างเองตอนมีข้อมูลเข้า ไม่ได้อยู่ใน migration และลบหลัง `TSDB_RETENTION` (30 วัน) ตารางของ pipeline ในเอกสารนี้ไม่โดน retention นี้ เทียบกัน: pipeline ใช้ `drone_id = 'uav0'` ส่วน Telegraf ใช้ `drone = '0'`
 
@@ -28,6 +28,7 @@
 | `detections` | ingestion | Kafka `detections` ← AI Detection | ≤ 2 แถว/วินาทีต่อลำ (เฉพาะเฟรมที่เจอคน) |
 | `survivors` | ingestion | Kafka `survivors` ← Geo-Localization | 1 แถวต่อการตรวจพบ |
 | `replanning_events` | ingestion | Kafka `replanning-events` ← Multi-UAV Control | ไม่กี่แถวต่อภารกิจ |
+| `events` | ingestion | Kafka `events` ← bridge (PX4 `mavlink_log`) | ไม่กี่แถว/นาทีต่อลำ |
 | `missions`, `drones` | ingestion (อัตโนมัติ) + ผู้ควบคุม | id ที่เจอใน message | 1 แถวต่อภารกิจ / ต่อโดรน |
 | `persons` | `aq_merge_survivors()` (ingestion เรียก) | `survivors` | 1 แถวต่อผู้ประสบภัย |
 | `search_area`, `grid_cells` | planner ผ่าน `aq_create_search_area()` | mCPP | ครั้งเดียวต่อภารกิจ |
@@ -62,7 +63,7 @@
 
 ## telemetry
 
-ตำแหน่งและสถานะของโดรน 10 ครั้ง/วินาทีต่อลำ เป็น TimescaleDB hypertable แบ่ง chunk วันละ 1 chunk บีบอัดหลัง 7 วัน (job `policy_compression` รันทุก 12 ชม., แยกตาม `drone_id`) ไม่ลบทิ้ง · ไม่มี foreign key (เพื่อให้เขียนเร็ว) · migration 0001, index ใน 0003, `sent_at` ใน 0008
+ตำแหน่งและสถานะของโดรน 10 ครั้ง/วินาทีต่อลำ เป็น TimescaleDB hypertable แบ่ง chunk วันละ 1 chunk บีบอัดหลัง 7 วัน (job `policy_compression` รันทุก 12 ชม., แยกตาม `drone_id`) ไม่ลบทิ้ง · ไม่มี foreign key (เพื่อให้เขียนเร็ว) · migration 0001, index ใน 0003, `sent_at` ใน 0008, คอลัมน์ landed – mission ใน 0009 / 0010
 
 | คอลัมน์ | ชนิด | Null | คีย์ / ค่าเริ่มต้น | คำอธิบาย | มาจาก PX4 |
 | --- | --- | --- | --- | --- | --- |
@@ -79,11 +80,22 @@
 | `battery_voltage` | REAL | ได้ |  | แรงดัน (V) | `battery_status.voltage_v` |
 | `nav_state` | TEXT | ได้ |  | โหมดบิน เช่น `OFFBOARD`, `AUTO_RTL` | `vehicle_status.nav_state` |
 | `armed` | BOOLEAN | ได้ |  | มอเตอร์พร้อมหมุนไหม | `vehicle_status.arming_state` |
+| `landed` | BOOLEAN | ได้ |  | อยู่บนพื้นไหม (0009) | `vehicle_land_detected.landed` |
+| `gps_fix_type` | SMALLINT | ได้ |  | 1 ไม่มี fix, 2 2D, 3 3D, 4 DGPS, 5/6 RTK, 8 extrapolated (0009) | `vehicle_gnss.receiver.fix_type` |
+| `gps_satellites` | SMALLINT | ได้ |  | จำนวนดาวเทียมที่ใช้ (0009) | `vehicle_gnss.receiver.satellites_used` |
+| `gps_eph` | REAL | ได้ |  | ความคลาดเคลื่อนแนวราบ (m) (0009) | `vehicle_gnss.receiver.eph` |
+| `gps_epv` | REAL | ได้ |  | ความคลาดเคลื่อนแนวดิ่ง (m) (0009) | `vehicle_gnss.receiver.epv` |
+| `health_ok` | BOOLEAN | ได้ |  | `false` = มี failsafe flag ร้ายแรง (เซนเซอร์ / ตำแหน่ง / GPS หาย / แบตเสีย / มอเตอร์) ส่วน flag สถานการณ์ เช่น ไม่มี mission, RC หาย ไม่นับ (0009) | คำนวณจาก `failsafe_flags` |
+| `failsafe_flags` | TEXT[] | ได้ |  | ชื่อ failsafe flag ที่เป็นจริงอยู่ เช่น `{gnss_lost}` (0009) | `failsafe_flags` (ทุก field boolean) |
+| `cpu_load` | REAL | ได้ |  | CPU ของ PX4 (%) (0010) | `cpuload.load` × 100 · ต้องมี patch `dds_topics` ของ px4-sim |
+| `mission_seq` | INTEGER | ได้ |  | waypoint ปัจจุบัน เริ่มที่ 0 (0010) | `mission_result.seq_current` · ต้องมี patch |
+| `mission_total` | INTEGER | ได้ |  | จำนวน item ใน mission ที่อัปโหลด, 0 = ไม่มี (0010) | `mission_result.seq_total` · ต้องมี patch |
+| `mission_finished` | BOOLEAN | ได้ |  | บินครบ mission แล้ว (0010) | `mission_result.finished` · ต้องมี patch |
 | `sent_at` | TIMESTAMPTZ | ได้ |  | เวลาที่ bridge ส่ง message เข้า Kafka (wall clock, CreateTime ของ message) · NULL สำหรับแถวก่อน 0008 | — |
 | `received_at` | TIMESTAMPTZ | ไม่ | `clock_timestamp()` (0008, เดิม `now()`), index received_at DESC | เวลาที่แถวเขียนลงฐานข้อมูล · latency = `received_at − sent_at` (D3, dashboard Path compare) | — |
 | `geom` | geometry(Point, 4326) | — | generated, GiST | จุดตำแหน่งจาก lon/lat | — |
 
-คอลัมน์ `geom` คำนวณเอง ห้าม insert ค่า · ชื่อ topic ของ PX4 จริงมี suffix ตามเวอร์ชัน (เช่น `vehicle_status_v4`) ตั้งได้ใน `bridge.yaml`
+คอลัมน์ `geom` คำนวณเอง ห้าม insert ค่า · คอลัมน์ 0009 / 0010 เป็น NULL ได้เสมอ (แถวจาก bridge รุ่นเก่า หรือก่อนได้รับ topic นั้นครั้งแรก) · ชื่อ topic ของ PX4 มี suffix ตามเวอร์ชัน (เช่น `vehicle_status_v5`) bridge หาเองจาก `MESSAGE_VERSION` ของ `px4_msgs` ที่ build ไว้ ถ้าจะบังคับชื่อให้ตั้งใน `bridge.yaml` · `cpuload`, `mission_result`, `mavlink_log` PX4 ไม่ส่งออกมาเอง ต้องใช้ `docker/px4-sim/dds_topics_extra.yaml`
 
 ## detections
 
@@ -161,6 +173,22 @@
 | `waypoints_reassigned` | INTEGER | ได้ |  | จำนวน waypoint ที่แจกใหม่ |
 | `assigned_to` | TEXT[] | ได้ |  | โดรนที่รับงานต่อ เช่น `{uav2,uav3}` |
 | `received_at` | TIMESTAMPTZ | ไม่ | `now()` | เวลาเข้าฐานข้อมูล |
+
+## events
+
+ข้อความจาก PX4 (`mavlink_log` = ข้อความเดียวกับ STATUSTEXT ของทาง MQTT) เช่น `Takeoff detected`, `Landing detected`, คำเตือน failsafe เป็น hypertable chunk ละ 7 วัน ไม่มี foreign key ไม่ลบทิ้ง · bridge ส่งเข้า Kafka topic `events` (เก็บ 30 วัน) · migration 0010, schema `events.schema.json`
+
+| คอลัมน์ | ชนิด | Null | คีย์ / ค่าเริ่มต้น | คำอธิบาย |
+| --- | --- | --- | --- | --- |
+| `ts` | TIMESTAMPTZ | ไม่ | PK (drone_id, ts, text) | เวลาที่ bridge **ได้รับ** ข้อความ (นาฬิกาเดียวกับ telemetry ไม่ใช่เวลาที่ PX4 สร้าง) |
+| `drone_id` | TEXT | ไม่ | PK | เช่น `uav0` |
+| `mission_id` | UUID | ได้ | index (mission_id, ts DESC) | ภารกิจ |
+| `severity` | SMALLINT | ไม่ |  | ระดับแบบ syslog 0 = emergency … 7 = debug |
+| `level` | TEXT | ไม่ |  | ชื่อของ severity: `emergency` · `alert` · `critical` · `error` · `warning` · `notice` · `info` · `debug` |
+| `text` | TEXT | ไม่ | PK | ข้อความ ไม่เกิน 200 ตัวอักษร |
+| `received_at` | TIMESTAMPTZ | ไม่ | `clock_timestamp()` | เวลาเขียนลงฐานข้อมูล |
+
+PK รวม `text` ด้วย: ข้อความต่างกันที่เวลาเดียวกันเก็บได้ทั้งคู่ ส่วน Kafka message ที่ส่งซ้ำจะถูกข้าม
 
 ## search_area
 
@@ -284,7 +312,7 @@ field ของแต่ละตาราง (ตัวเลขเป็น DO
 | `aq_prune_ingest_rejects` | `p_keep interval` (30 วัน) | BIGINT (จำนวนที่ลบ) | ลบ `ingest_rejects` ที่เก่ากว่า `p_keep` | เรียกเอง (ยังไม่มี cron) | 0003 |
 | `aq_current_area` | `p_mission uuid` | UUID | `search_area` ที่ใหม่ที่สุดของภารกิจ | dashboard Mission | 0007 |
 | `aq_cell_coverage` | `p_area uuid`, `p_swath_m` (0), `p_min_alt_m` (2) | ตาราง `cell_row`, `cell_col`, `lat`, `lon`, `covered` | ทุกช่องกริดพร้อมจุดกลางและว่าบินผ่านแล้วหรือยัง (กฎเดียวกับ `aq_coverage` source flown) | dashboard Mission (แผนที่ coverage, D2) | 0007 |
-| `aq_drone_status` | `p_mission uuid`, `p_window interval` (1 ชม.) | ตาราง `drone_id`, `ts`, `lat`, `lon`, `alt_rel`, `battery_pct`, `battery_voltage`, `nav_state`, `armed`, `speed_ms`, `age_s` | แถวล่าสุดต่อลำในภารกิจ (ใช้ PK จึงเร็ว) · `battery_pct` 0–100 · `age_s` = วินาทีตั้งแต่ `received_at` | dashboard Mission (D1) | 0007 |
+| `aq_drone_status` | `p_mission uuid`, `p_window interval` (1 ชม.) | ตาราง `drone_id`, `ts`, `lat`, `lon`, `alt_rel`, `battery_pct`, `battery_voltage`, `nav_state`, `armed`, `speed_ms`, `age_s` + (0009) `landed`, `gps_fix_type`, `gps_satellites`, `health_ok`, `failsafe_flags` + (0010) `cpu_load`, `mission_seq`, `mission_total`, `mission_finished` | แถวล่าสุดต่อลำในภารกิจ (ใช้ PK จึงเร็ว) · `battery_pct` 0–100 · `age_s` = วินาทีตั้งแต่ `received_at` | dashboard Mission (D1) | 0007, เพิ่มคอลัมน์ 0009 / 0010 |
 | `aquarius_hypertable` | `tbl regclass`, `retention text` | void | ทำตารางของ Telegraf ให้เป็น hypertable + index + retention | Telegraf ตอนสร้างตาราง | init script (compose) |
 
 ## Index และอายุข้อมูล
@@ -298,6 +326,7 @@ field ของแต่ละตาราง (ตัวเลขเป็น DO
 | `survivors` | GiST `geom` · `(mission_id, ts DESC)` · `(person_id)` · `(mission_id, ts) WHERE person_id IS NULL` (0005, หาตัวที่ยังไม่รวม) | เก็บตลอด |
 | `persons` | `(mission_id)` · GiST `geom` · GiST `geom::geography` (0005, ให้ `ST_DWithin` เป็นเมตรใช้ index) | ลบตามภารกิจ |
 | `replanning_events` | `(mission_id, ts)` | เก็บตลอด |
+| `events` | `(mission_id, ts DESC)` · ของ hypertable บน `ts` (chunk 7 วัน) | เก็บตลอด |
 | `search_area` | GiST `geom` · `(mission_id)` | ลบตามภารกิจ |
 | `grid_cells` | GiST `geom` | ลบตามพื้นที่ |
 | `flight_paths` | GiST `geom` · `(mission_id, kind)` | ลบตามภารกิจ |
