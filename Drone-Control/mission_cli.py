@@ -1,7 +1,7 @@
 """
 mission_cli.py — one-shot drone commands for the `aquarius` CLI (scripts/aquarius).
 
-  python3 mission_cli.py goto 37.4125,-121.9985 37.4128,-121.9992   # waypoints -> PX4 mission -> RTL
+  python3 mission_cli.py goto 13.6510,100.4940 13.6512,100.4936   # waypoints -> PX4 mission -> RTL
   python3 mission_cli.py status                                     # armed, mode, battery, position
   python3 mission_cli.py rtl | land                                 # return to launch / land now
 
@@ -11,7 +11,7 @@ The mission is uploaded to PX4, so QGroundControl shows it. Takeoff / mission / 
 Env / args (args win):
   DRONE_ID     drone to command (udp 14540 + DRONE_ID)       default 0
   MAVLINK_URL  full address instead (e.g. serial:///dev/ttyUSB0:57600)
-  ALT / SPEED  mission altitude (m, relative to home) / m/s   default 20 / 5
+  ALT / SPEED  mission altitude (m, relative to home) / m/s   default 40 / 5
   MAX_DIST     refuse points further than this from home (m) default 1000
 """
 import argparse
@@ -28,7 +28,7 @@ POINT = re.compile(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)")
 def parse_points(tokens):
     points = [(float(a), float(b)) for a, b in POINT.findall(" ".join(tokens))]
     if not points:
-        raise SystemExit("no waypoint given — use LAT,LON e.g. 37.4125,-121.9985")
+        raise SystemExit("no waypoint given — use LAT,LON e.g. 13.6510,100.4940")
     for lat, lon in points:
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             raise SystemExit(f"invalid point {lat},{lon} (LAT,LON order?)")
@@ -114,7 +114,7 @@ def main():
     ap.add_argument("cmd", choices=["goto", "status", "rtl", "land"])
     ap.add_argument("points", nargs="*", help="goto: LAT,LON ...")
     ap.add_argument("--drone-id", type=int, default=int(env("DRONE_ID", "0")))
-    ap.add_argument("--alt", type=float, default=float(env("ALT", "20")))
+    ap.add_argument("--alt", type=float, default=float(env("ALT", "40")))
     ap.add_argument("--speed", type=float, default=float(env("SPEED", "5")))
     ap.add_argument("--max-dist", type=float, default=float(env("MAX_DIST", "1000")))
     ap.add_argument("--connect-timeout", type=float, default=float(env("CONNECT_TIMEOUT", "60")))

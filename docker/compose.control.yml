@@ -28,7 +28,7 @@ services:
       - AREA_W=${AREA_W:-80}                  # mcpp_mission.py: area east-west, m
       - AREA_H=${AREA_H:-60}                  #                  area north-south, m
       - SWEEP=${SWEEP:-5}                     #                  line spacing, m
-      - ALT=${ALT:-20}                        #                  altitude, m
+      - ALT=${ALT:-40}                        #                  altitude, m (KMUTT roofs ~20-30 m near home)
       - SPEED=${SPEED:-5}                     #                  m/s
     command: sleep infinity
     stdin_open: true

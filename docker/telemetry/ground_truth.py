@@ -20,7 +20,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-WORLD = os.environ.get('PX4_GZ_WORLD', 'baylands')
+WORLD = os.environ.get('PX4_GZ_WORLD', 'kmutt')
 MODEL = os.environ.get('PX4_SIM_MODEL', 'gz_x500').split('gz_', 1)[-1]
 NUM = int(os.environ.get('PX4_NUM_DRONES', '1'))
 RATE = float(os.environ.get('GT_RATE', '30'))

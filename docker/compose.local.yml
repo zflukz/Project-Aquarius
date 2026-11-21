@@ -20,6 +20,8 @@ services:
   px4-sim:
     build:
       context: ./px4-sim
+      additional_contexts:
+        simulation: ../Simulation           # KMUTT Gazebo world + models (PX4_GZ_WORLD=kmutt)
     image: ${REGISTRY:-ghcr.io/zflukz}/aquarius-px4-sim:${TAG:-latest}
     container_name: px4-sim
     networks:
@@ -27,10 +29,14 @@ services:
     environment:
       - CONTROL_HOST=drone-control          # PX4 sends MAVLink to the drone-control container
       - PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}
-      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-kmutt}
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
       - PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
       - DRONE_SPACING=${DRONE_SPACING:-3}
+      - DRONE_SPAWN_X=${DRONE_SPAWN_X:-}       # drone 0 spawn point, world m; empty = per world
+      - DRONE_SPAWN_Y=${DRONE_SPAWN_Y:-}       #   (kmutt -65 / -53 / 7.5 = open ground SW of the pond)
+      - DRONE_SPAWN_Z=${DRONE_SPAWN_Z:-}
+      - KMUTT_TREES=${KMUTT_TREES:-}           # 1 = KMUTT trees on (RTF ~0.9 -> ~0.4 with 2 cameras)
       - HEADLESS=${HEADLESS:-}
       - QGC=${QGC:-1}                       # QGroundControl in its own noVNC (:8082)
       - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
@@ -49,7 +55,7 @@ services:
     ports:                                  # served by telemetry (it shares this network namespace)
       - "8083:8083"                         # camera: http://localhost:8083/
     volumes:
-      - gz-fuel-cache:/root/.gz/fuel        # keep downloaded worlds (Baylands) across rebuilds
+      - gz-fuel-cache:/root/.gz/fuel        # Gazebo Fuel downloads (Baylands if picked); kmutt is in the image
     stop_grace_period: 10s
     restart: unless-stopped
 
@@ -94,7 +100,7 @@ services:
     network_mode: service:px4-sim
     environment:
       - PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}  # same as px4-sim -> topic names
-      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+      - PX4_GZ_WORLD=${PX4_GZ_WORLD:-kmutt}
       - PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
       - GZ_PARTITION=${GZ_PARTITION:-aquarius}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
@@ -350,7 +356,7 @@ services:
       - AREA_W=${AREA_W:-80}                  # mcpp_mission.py: area east-west, m
       - AREA_H=${AREA_H:-60}                  #                  area north-south, m
       - SWEEP=${SWEEP:-5}                     #                  line spacing, m
-      - ALT=${ALT:-20}                        #                  altitude, m
+      - ALT=${ALT:-40}                        #                  altitude, m (KMUTT roofs ~20-30 m near home)
       - SPEED=${SPEED:-5}                     #                  m/s
     # stays up as the control station — run scripts with `docker compose exec`
     command: sleep infinity

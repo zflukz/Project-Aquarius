@@ -3,7 +3,7 @@
 #
 # Same software as the Docker image docker/px4-sim/Dockerfile, so docker/bench_sim.sh compares
 # like with like: Ubuntu 24.04, Gazebo Harmonic from the OSRF apt repo, PX4 `main` with
-# `make px4_sitl_default` already built, Baylands world pre-cached.
+# `make px4_sitl_default` already built; KMUTT world from Simulation/ (copied by run_sim_native.sh).
 # Docker (docker/compose.server.yml) is the maintained path; use this for native runs / benchmarks.
 #
 # Usage:  bash scripts/install_sim_server.sh
@@ -55,9 +55,8 @@ fi
 echo ">>> [4/5] Build PX4 SITL (once, like the Docker image)"
 make -C "$PX4_DIR" px4_sitl_default
 
-echo ">>> [5/5] Pre-cache the Baylands world (else PX4 hangs on 'Waiting for Gazebo world...')"
-gz fuel download -u "https://fuel.gazebosim.org/1.0/openrobotics/models/Baylands" \
-    || echo "WARN: Baylands download failed — run_sim_native.sh retries"
+echo ">>> [5/5] Gazebo world: KMUTT (default) comes from this repo's Simulation/ — run_sim_native.sh copies it"
+echo "    into $PX4_DIR/Tools/simulation/gz at every start (PX4_GZ_WORLD=baylands downloads Baylands once instead)"
 
 echo ""
 echo "=== VM server (native) setup complete ==="

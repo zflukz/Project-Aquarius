@@ -14,7 +14,8 @@ grep -q '^subscriptions:' "$f" || { echo "dds_topics: no 'subscriptions:' line i
 tmp=$(mktemp)
 awk -v extra="$extra" '
     /^subscriptions:/ && !done {
-        while ((getline line < extra) > 0) if (line !~ /^#/) print line
+        # strip CR: a Windows checkout (core.autocrlf=true) gives the yaml CRLF line endings
+        while ((getline line < extra) > 0) { sub(/\r$/, "", line); if (line !~ /^#/) print line }
         print ""
         done = 1
     }

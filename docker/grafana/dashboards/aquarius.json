@@ -601,7 +601,7 @@
     {
       "type": "geomap",
       "title": "Position and flight path",
-      "description": "Track = time range, big dot = last position. Same GPS as QGC (Baylands world origin).",
+      "description": "Track = time range, big dot = last position. Same GPS as QGC (Gazebo world origin, KMUTT).",
       "targets": [
         {
           "refId": "A",
@@ -712,8 +712,8 @@
         "view": {
           "id": "fit",
           "allLayers": true,
-          "lat": 37.4122,
-          "lon": -121.9989,
+          "lat": 13.6508,
+          "lon": 100.4938,
           "zoom": 18,
           "padding": 25,
           "maxZoom": 19

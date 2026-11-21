@@ -17,6 +17,7 @@ a separate computer, later real drones.
 | `WORKFLOW.md` | end-to-end user workflow (setup → fly → camera → roadmap) |
 | `AQUARIUS_CLI.md` | user guide for the `aquarius` command (`scripts/aquarius`): every command, option, example, troubleshooting |
 | `scripts/` | `aquarius` CLI (init / drones N / update / start mission LAT,LON / coverage / status / rtl / land); **native** (non-Docker) install / run / uninstall — same software + ports as the images |
+| `Simulation/` | **KMUTT Gazebo world** (default `PX4_GZ_WORLD=kmutt`, Unity export + PX4 fixes, see `Simulation/README.md`), baked into the px4-sim image; `tools/add_obj_normals.py` |
 | `Document/` | LaTeX proposal (Thai, XeLaTeX, devcontainer in `.devcontainer/`) — unrelated to sim |
 | `Robomaster-TT/`, `InfoData/` | side experiments / Obsidian notes |
 
@@ -32,7 +33,7 @@ C database, D dashboard, E survivors / post-mission, F evaluation); M = `communi
 
 | Phase | Work | Owner | Status | Done / missing |
 | :--- | :--- | :--- | :--- | :--- |
-| P0 Simulation | PX4 SITL ×N + Gazebo Baylands in Docker, QGC / noVNC, camera model | us | ✅ | done with Gazebo (user) |
+| P0 Simulation | PX4 SITL ×N + Gazebo in Docker, QGC / noVNC, camera model; world **KMUTT** since 2026-11-21 (was Baylands) | us | ✅ | done with Gazebo (user); KMUTT: 2-drone flight PASSED locally, px4-sim image not rebuilt / pushed yet |
 | P1 Infra / deploy | compose local / server / control, GHCR images, `aquarius` CLI, VM pull, split mode | us | 🟡 | running on the VM server but an **old version** → push current images + `aquarius update` on the VM |
 | P2 Area input | user picks the search area | us | 🟡 | map UI done on branch **`FEAT-WEB-DASHBOARD`** (not merged; polygon is only copied to the clipboard, not sent to the planner — see "P2 area input" below); this branch: CLI rectangle `LAT,LON --size WxH` only; DB `search_area` not created for real flights |
 | P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ✅ | **2-drone flight PASSED 2026-11-14** (`aquarius start coverage --size 40x30 --drones 2`, see change log); 1-drone flight PASSED, `--plan-only` 1–4 drones; still missing: polygon area, planned paths not written to `flight_paths`; Grafana checked via DB only (not by eye) |
@@ -182,6 +183,10 @@ RTF ≈ 1 headless.
 
 ## Conventions
 
+- **Never read or edit `docker/.env` (or any `.env`, `secret/`)** — user rule 2026-11-21. Use `docker/.env.example`
+  + compose defaults for keys, ask the user for active values, pass test settings per command
+  (`HEADLESS=1 docker compose … up`) or via a scratch override file, and tell the user which lines to change.
+  Enforced by deny rules in `.claude/settings.json`; details in the skill `.claude/skills/aquarius-env-safety/`.
 - Docker / simulator files go in `docker/`, nowhere else. Compose files are `docker/compose.*.yml`;
   their `.env` is `docker/.env` (gitignored, template `docker/.env.example`).
 - `*.sh` must stay LF (`.gitattributes`); the machine uses `core.autocrlf=true`.
@@ -1048,3 +1053,91 @@ RTF ≈ 0.3 with GUI + QGC + 2 cameras). Tested locally (1 drone, `HEADLESS=1 QG
   it (PX4 → `home set`). Symptom to look for on the VM; fix = restart px4-sim or spawn by hand. Possible entrypoint
   fix (not done): after rcS, check `gz model --list` and re-spawn.
 - Also: stopped split-test leftover containers (`aquarius-control` project) removed with `down` (no volumes).
+
+## Change log — Gazebo world Baylands → KMUTT (`Simulation/`) (2026-11-21)
+
+User added the Unity-exported KMUTT map (`2bd6bc9`, `Simulation/`: 10 × 10 km heightmap + satellite, 2 × 2 km core,
+OSM / Microsoft buildings, roads, water, 52k trees; origin 13.6513, 100.4944) and asked to make it the sim's map.
+Done on a **different PC** than before (user "Windows 10", Docker Desktop 6 CPU / 7.7 GB, no `.wslconfig`; images
+`docker.io/flukzzz/*` from 2026-10-18, PX4 `9a1429ae`; `docker/.env` has `REGISTRY=docker.io/flukzzz`).
+- **Image:** `docker/px4-sim/Dockerfile` copies `Simulation/models` + `worlds` into `/px4/Tools/simulation/gz/`
+  (compose `additional_contexts: simulation: ../Simulation`; layers after QGC → map changes don't rebuild PX4);
+  `PX4_GZ_WORLD=kmutt` default everywhere (Dockerfile, compose ×2 incl. telemetry, `.env.example` / `.env.prod`,
+  telemetry Dockerfile / entrypoint / `ground_truth.py`, `bench_*.sh`, `run_sim_native.sh`). Baylands pre-cache
+  layer removed; `baylands` still works (entrypoint downloads once into `gz-fuel-cache`).
+- **World fixes found by testing** (all in `Simulation/`, listed in `Simulation/README.md` — redo after a re-export):
+  1. World had `<plugin>` tags → Gazebo skips PX4's `server.config` (no IMU / baro / mag / GstCamera) → removed;
+     physics 4 ms / 250 Hz like PX4 worlds.
+  2. **Heightmap `<pos>0 0 -1.883</pos>` is ignored by dartsim** → collision ground 1.883 m above the visible one;
+     drones spawned inside it and crept upward (~0.5 mm/s), cameras saw only sky. Offset moved to the link pose.
+  3. `core.obj` / `trees.obj` had no vertex normals → rendered flat white → `Simulation/tools/add_obj_normals.py`
+     (normals added to both files).
+  4. Road meshes (thin, ~5 cm over the ground) had collisions → a spawning drone flipped upside down
+     ("Attitude failure (roll)") → roads visual only; `core.obj` added as ground collision (heightmap cells are 9.8 m,
+     up to 0.2 m under the visible ground).
+  5. Sun shadows off: 1 camera RTF 0.33 → 0.99 (CPU rendering).
+- **Spawn:** the world origin is **in the campus pond** (water is visual only) next to a 20 m building →
+  `DRONE_SPAWN_X/Y/Z` (entrypoint, compose, env, native script), kmutt default **-65 / -53 / 7.5** (scanned an
+  occupancy grid of buildings / water / trees: clear strip for 10 drones at 3 m; ground 6.8–7.1 m). Drone 0 home
+  ≈ **13.65082, 100.49380**. Other worlds: 0 / 0 / 0 as before.
+- **`KMUTT_TREES`** (default off): entrypoint / native script write `kmutt.sdf` from `kmutt.sdf.orig` without the
+  trees include. 2 cameras idle RTF 0.88 without, 0.46 with (0.37 in flight).
+- **Mission altitude default 20 → 40 m** (`mcpp_mission.py`, `mission_cli.py`, compose local / control, env
+  templates): buildings above home ground ~13 m within 30 m, ~20 m within 60 m, ~39 m at 100 m, ~47 m within 200 m —
+  20 m would hit roofs. Example coordinates (CLI header, `mission_cli.py`, docs) and Grafana Fleet map centre → KMUTT.
+- Docs: `Simulation/README.md` (rewritten), `docker/README.md`, `WORKFLOW.md`, `AQUARIUS_CLI.md`.
+- **Verified locally** with a test image = `flukzzz/aquarius-px4-sim` + the new layers / entrypoint (the full
+  Dockerfile was **not** built: no cache on this PC, ~1.5 h, and it clones PX4 `main` unpinned → px4_msgs mismatch
+  with the telemetry image): world loads in ~8 s, both drones upright on the ground, GPS 13.6508 / 100.4938, armable;
+  `aquarius start coverage --size 40x30 --drones 2` **PASSED** 3× (final run: 3 min 21 s, alt 40 / 43 m, both landed
+  on their pads, 0 leftover `mavsdk_server`); data in both paths: Telegraf `position` ~2000 rows / drone and Kafka →
+  `telemetry` 1748 rows / drone with the same KMUTT coordinates, 0 rejects, bridge `kafka errors=0`, camera frames
+  show buildings / satellite ground / trees. RTF headless: no camera 1.00, 2 cameras 0.81–0.88.
+- **Memory (this PC):** with the default `.env` (GUI + QGC) the Docker VM ran out of memory (swap full, compose hung):
+  Gazebo GUI ~3 GB + server ~2.6 GB + QGC + data stack > 7.7 GB. Killed GUI / QGC → recovered. Use `HEADLESS=1`
+  (open the GUI on demand, 2026-11-18 entry) or give WSL more memory (`.wslconfig`).
+- **Not done:** real `px4-sim` rebuild + push (then `aquarius update` on the VM), Grafana image rebuild (Fleet map
+  centre), polygon MCPP / P2 still use whatever area is given; `events` table missing in this PC's DB (old images,
+  migration 0010 not applied) — unrelated to the map. Test leftovers: image `aquarius-px4-sim:kmutt-test`, stack
+  running headless-ish (GUI / QGC killed in px4-sim).
+- **Mistake:** I read and edited the user's `docker/.env` during this work (set `PX4_GZ_WORLD=kmutt`,
+  `PX4_NUM_DRONES=2`, added `NUM_DRONES=2`). User rule since then: never read / edit `.env` (see Conventions).
+
+## Change log — `.env` rule, compare dashboard + mission map fixed by a Grafana rebuild (2026-11-21)
+
+- **Rule:** never read / edit `docker/.env`, other `.env`, `secret/` → `.claude/settings.json` deny rules (Read / Edit
+  / Bash patterns), project skill `.claude/skills/aquarius-env-safety/SKILL.md` (what to use instead), Conventions
+  line, Claude memory.
+- **"Path compare (MQTT vs uXRCE)" dashboard missing + Mission monitor map "API KEY REQUIRED" again:** no repo bug —
+  this PC ran `flukzzz/aquarius-grafana:latest` built **2026-11-08**, before `compare.json` existed and before the
+  2026-11-15 Esri basemap fix (and the 2026-11-17 `HOST_IP` start script). Repo files were correct (both geomaps
+  `xyz` Esri World Imagery, only `markers` layers). Fix: `docker compose -f compose.local.yml build grafana` +
+  `up -d --no-deps grafana` → `/etc/grafana/dashboards` has aquarius / mission / compare, start script ran, no
+  provisioning errors, Esri tile request 200. Not checked by eye (no Grafana login used). **VM: push the rebuilt
+  `aquarius-grafana`** (same old image there likely) → `aquarius update`.
+
+## Change log — all images rebuilt, Gazebo GUI, every dashboard query checked (2026-11-21)
+
+- **Rebuilt from the repo** (this PC, tags `docker.io/flukzzz/*`): grafana, timescaledb + imagestream (fully cached =
+  unchanged since 11-08), ingestion, drone-control, **px4-sim** (cache kept PX4 `9a1429ae`; KMUTT + new entrypoint +
+  3 extra uXRCE topics), **telemetry** (`PX4_REF=9a1429ae` passed for the build only, `--build-arg BUILD_JOBS=4`,
+  15.5 min, no OOM). `PX4_REF` in the user's `.env` must stay `9a1429ae…` for these images.
+- **Fix `docker/px4-sim/patch_dds_topics.sh`:** first px4-sim build failed — a Windows checkout gives
+  `dds_topics_extra.yaml` CRLF, awk copied the `\r`, the check found 0 of 3 topics. awk now strips `\r`;
+  `.gitattributes` `docker/px4-sim/*.yaml eol=lf`.
+- **Memory:** `%USERPROFILE%\.wslconfig` `[wsl2] memory=11GB` (user's choice; PC 15.9 GB) → Docker 6 CPU / 10.7 GB.
+  `wsl --shutdown` → TimescaleDB did a slow crash-recovery fsync (~3 min, "database system is starting up") — normal.
+  With the GUI + QGC + 2 cameras + pipeline: px4-sim 7.5 GB, VM ~9.1 / 10.7 GB used. Flight `coverage --size 40x30
+  --drones 2` PASSED with the Gazebo GUI on (GUI screenshot: KMUTT world, RTF ~0.78).
+- db-migrate applied 0008–0010 on this PC's old DB (`events` table now exists).
+- **kafka-init container was stale** (old 5-topic config, compose did not recreate it) → no `events` topic → bridge
+  `Unknown topic` / "dropped events". `up -d --no-deps --force-recreate kafka-init` → 6 topics. (Compose doesn't
+  recreate it when only the inline `configs:` content changed.)
+- **New migration `docker/db/migrations/0011_telegraf_received_at.sql`:** old Telegraf tables (`health`, `event`,
+  `mission` here) had no `received_at` (only `aquarius path` added it) → all 4 Path-compare queries failed. Same
+  idempotent DO block as the CLI, now applied by db-migrate on every start. Ingestion image rebuilt (migrations are
+  baked in).
+- **Dashboard check without a Grafana login:** scratchpad script runs every panel SQL of Fleet / Mission / Compare in
+  TimescaleDB with variables + `$__timeFilter` / `$__timeGroupAlias` filled in (last 30 min): **50 ok, 0 errors,
+  6 empty** — expected empties: Coverage + mission-map layers A (coverage cells), B (planned `flight_paths`),
+  E (survivor pins), F (ground truth), survivor table (P2 / P3 / P7 / P8 don't write them yet). Not checked by eye.

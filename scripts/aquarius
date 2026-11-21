@@ -20,11 +20,11 @@
 #   aquarius down                        stop the containers
 #   aquarius install                     link this script to ~/.local/bin/aquarius
 #
-# Examples (Baylands home is ~37.4122,-121.9989):
+# Examples (KMUTT home of drone 0 is ~13.65082,100.49380):
 #   aquarius init --camera
-#   aquarius start mission 37.4125,-121.9985 37.4128,-121.9992
-#   aquarius start mission "{37.4125,-121.9985}" --alt 30 --drone 1
-#   aquarius start coverage 37.4126,-121.9990 --size 40x30
+#   aquarius start mission 13.6510,100.4940 13.6512,100.4936
+#   aquarius start mission "{13.6510,100.4940}" --alt 50 --drone 1
+#   aquarius start coverage 13.6509,100.4939 --size 40x30
 #
 # Missions run in the background (Docker: inside drone-control, native: Drone-Control/.venv), so
 # Ctrl+C only stops following the log — the drone keeps flying. Stop it with `aquarius rtl` / `land`.

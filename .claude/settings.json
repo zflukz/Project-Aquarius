@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(docker/.env)",
+      "Edit(docker/.env)",
+      "Read(**/.env)",
+      "Edit(**/.env)",
+      "Read(**/.env.local)",
+      "Edit(**/.env.local)",
+      "Read(secret/**)",
+      "Edit(secret/**)",
+      "Bash(*/.env)",
+      "Bash(*/.env *)",
+      "Bash(* .env)",
+      "Bash(* .env *)",
+      "Bash(*/.env|*)",
+      "Bash(*/.env;*)",
+      "Bash(*secret/*)"
+    ]
+  }
+}

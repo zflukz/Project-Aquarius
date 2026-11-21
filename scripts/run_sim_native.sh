@@ -13,7 +13,8 @@
 #   telemetry         : PX4 listens 14740+i, sends to TELEM_HOST:14700 (mavlink_mqtt.py -> MQTT -> Grafana)
 #
 # Env (defaults): CONTROL_HOST (empty = PX4 defaults, localhost only)  PX4_NUM_DRONES=1
-#   PX4_GZ_WORLD=baylands  PX4_SIM_MODEL=gz_x500  PX4_SYS_AUTOSTART=4001  DRONE_SPACING=3
+#   PX4_GZ_WORLD=kmutt  PX4_SIM_MODEL=gz_x500  PX4_SYS_AUTOSTART=4001  DRONE_SPACING=3
+#   DRONE_SPAWN_X/Y/Z (empty = per world, kmutt -65 / -53 / 7.5)  KMUTT_TREES (1 = trees on)
 #   HEADLESS (1 = no GUI)  PX4_DIR=~/PX4-Autopilot  LOG_DIR=/tmp/px4-native
 #   GZ_PARTITION=aquarius  ROS_DOMAIN_ID=0  PX4_VIDEO_HOST_IP=127.0.0.1   (as in the compose files)
 #   TELEM (0 = no telemetry link)  TELEM_HOST=127.0.0.1
@@ -31,7 +32,7 @@ BIN="$PX4_DIR/build/px4_sitl_default/bin"
 LOG_DIR=${LOG_DIR:-/tmp/px4-native}
 FUEL_DIR="$HOME/.gz/fuel/fuel.gazebosim.org/openrobotics/models"
 export PX4_NUM_DRONES=${PX4_NUM_DRONES:-1}
-export PX4_GZ_WORLD=${PX4_GZ_WORLD:-baylands}
+export PX4_GZ_WORLD=${PX4_GZ_WORLD:-kmutt}
 export PX4_SIM_MODEL=${PX4_SIM_MODEL:-gz_x500}
 export PX4_SYS_AUTOSTART=${PX4_SYS_AUTOSTART:-4001}
 export HEADLESS=${HEADLESS:-}
@@ -84,6 +85,24 @@ if [ "$PX4_GZ_WORLD" = baylands ] && ! compgen -G "$FUEL_DIR/baylands/*/model.sd
         || echo "WARN: Baylands download failed — Gazebo may hang waiting for the world"
 fi
 
+# KMUTT world from this repo's Simulation/ -> PX4's world / model folders (the Docker image does the same at
+# build time); trees only with KMUTT_TREES=1 (CPU-rendered cameras: RTF ~0.9 -> ~0.4)
+SIM_DIR="$(cd "$(dirname "$0")/.." && pwd)/Simulation"
+if [ -f "$SIM_DIR/worlds/kmutt.sdf" ]; then
+    cp -r "$SIM_DIR/models/." "$PX4_DIR/Tools/simulation/gz/models/"
+    if [ "$KMUTT_TREES" = 1 ]; then
+        cp "$SIM_DIR/worlds/kmutt.sdf" "$PX4_DIR/Tools/simulation/gz/worlds/kmutt.sdf"
+    else
+        sed 's|<include><uri>model://kmutt_trees</uri></include>|<!-- kmutt_trees off (KMUTT_TREES=1 to enable) -->|' \
+            "$SIM_DIR/worlds/kmutt.sdf" > "$PX4_DIR/Tools/simulation/gz/worlds/kmutt.sdf"
+    fi
+fi
+# spawn point of drone 0 — same defaults as docker/px4-sim/entrypoint.sh (KMUTT: open ground SW of the pond)
+case "$PX4_GZ_WORLD" in
+    kmutt) SPAWN_X=${DRONE_SPAWN_X:--65}; SPAWN_Y=${DRONE_SPAWN_Y:--53}; SPAWN_Z=${DRONE_SPAWN_Z:-7.5} ;;
+    *)     SPAWN_X=${DRONE_SPAWN_X:-0};   SPAWN_Y=${DRONE_SPAWN_Y:-0};   SPAWN_Z=${DRONE_SPAWN_Z:-0} ;;
+esac
+
 PX4_PIDS=()
 cleanup() {
     echo "Stopping PX4 and Gazebo..."
@@ -117,7 +136,7 @@ echo "Starting $PX4_NUM_DRONES x $PX4_SIM_MODEL in world '$PX4_GZ_WORLD' (contro
 
 cd "$PX4_DIR"
 for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
-    PX4_GZ_MODEL_POSE="0,$((i * DRONE_SPACING))" \
+    PX4_GZ_MODEL_POSE="$SPAWN_X,$(awk "BEGIN {print $SPAWN_Y + $i * $DRONE_SPACING}"),$SPAWN_Z" \
         "$BIN/px4" -i "$i" -d \
         > >(tee "$LOG_DIR/px4-$i.log" | sed -u "s/^/[drone$i] /") 2>&1 &
     PX4_PIDS+=($!)

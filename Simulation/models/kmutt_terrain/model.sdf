@@ -2,13 +2,17 @@
 <sdf version="1.9">
   <model name="kmutt_terrain">
     <static>true</static>
+    <!-- The -1.883 m height offset is the link pose, not <heightmap><pos>: Gazebo Harmonic's physics (dartsim)
+         ignores <pos> on heightmap collisions, so with <pos>0 0 -1.883</pos> the collision ground sat 1.883 m above
+         the visible ground (drones spawned at the visible height got stuck inside it and slowly pushed up). -->
     <link name="link">
+      <pose>0 0 -1.883 0 0 0</pose>
       <collision name="collision">
         <geometry>
           <heightmap>
             <uri>model://kmutt_terrain/materials/textures/heightmap.png</uri>
             <size>10000 10000 10.171</size>
-            <pos>0 0 -1.883</pos>
+            <pos>0 0 0</pos>
           </heightmap>
         </geometry>
       </collision>
@@ -22,11 +26,19 @@
             </texture>
             <uri>model://kmutt_terrain/materials/textures/heightmap.png</uri>
             <size>10000 10000 10.171</size>
-            <pos>0 0 -1.883</pos>
+            <pos>0 0 0</pos>
           </heightmap>
         </geometry>
       </visual>
+      <!-- core.obj (2 x 2 km, ~4 m triangles) also as collision: the heightmap has 9.8 m cells and lies up to ~0.2 m
+           below the visible ground -> landed drones looked sunk in and their cameras saw nothing -->
+      <collision name="core_ground_collision">
+        <pose>0 0 1.883 0 0 0</pose>
+        <geometry><mesh><uri>model://kmutt_terrain/meshes/core.obj</uri></mesh></geometry>
+      </collision>
       <visual name="core_ground">
+        <!-- core.obj is in world coordinates -> undo the link offset -->
+        <pose>0 0 1.883 0 0 0</pose>
         <geometry><mesh><uri>model://kmutt_terrain/meshes/core.obj</uri></mesh></geometry>
       </visual>
     </link>

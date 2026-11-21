@@ -1,3 +1,5 @@
 # shell scripts run inside Linux containers / VMs — never check out with CRLF
 *.sh text eol=lf
 scripts/aquarius eol=lf
+# read by Linux tools inside the px4-sim image build
+docker/px4-sim/*.yaml eol=lf

@@ -24,7 +24,7 @@ Env / args (args win):
   AREA_N/AREA_E  area centre offset from drone 0 home (north/east) default 0 / 0
   AREA_CENTER  area centre as "LAT,LON" instead (wins over AREA_N/AREA_E)
   SWEEP        line spacing in metres (sensor footprint)          default 5
-  ALT          flight altitude (drone i flies ALT + i*ALT_STEP)   default 20
+  ALT          flight altitude (drone i flies ALT + i*ALT_STEP)   default 40
   SPEED        m/s                                                 default 5
 
   python3 mcpp_mission.py                       # drone 0, default area
@@ -360,7 +360,7 @@ def main():
     ap.add_argument("--area-e", type=float, default=float(env("AREA_E", "0")), help="centre east of home, m")
     ap.add_argument("--center", default=env("AREA_CENTER", ""), help="area centre LAT,LON (instead of --area-n/-e)")
     ap.add_argument("--sweep", type=float, default=float(env("SWEEP", "5")), help="line spacing, m")
-    ap.add_argument("--alt", type=float, default=float(env("ALT", "20")))
+    ap.add_argument("--alt", type=float, default=float(env("ALT", "40")))
     ap.add_argument("--alt-step", type=float, default=float(env("ALT_STEP", "3")))
     ap.add_argument("--speed", type=float, default=float(env("SPEED", "5")))
     ap.add_argument("--spacing", type=float, default=float(env("DRONE_SPACING", "3")),

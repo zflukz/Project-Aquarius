@@ -22,7 +22,7 @@
 #
 # Env (defaults): WARMUP=60 (s after the switch)  DURATION=60 (s)  SAMPLE=5 (s between docker stats)
 #   RESULTS=./bench_paths.csv  AQUARIUS (the aquarius script, found next to this file / in ../scripts / PATH)
-#   NO_SWITCH (1 = don't switch)  PX4_GZ_WORLD (from docker/.env, default baylands)
+#   NO_SWITCH (1 = don't switch)  PX4_GZ_WORLD (from docker/.env, default kmutt)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1   # Git Bash: keep /world/..., /proc/... arguments
 
@@ -46,7 +46,7 @@ if [ -z "${AQUARIUS:-}" ]; then
         [ -n "$a" ] && [ -f "$a" ] && { AQUARIUS=$a; break; }
     done
 fi
-WORLD=${PX4_GZ_WORLD:-$(env_val PX4_GZ_WORLD)}; WORLD=${WORLD:-baylands}
+WORLD=${PX4_GZ_WORLD:-$(env_val PX4_GZ_WORLD)}; WORLD=${WORLD:-kmutt}
 PATHS=("$@"); [ ${#PATHS[@]} -gt 0 ] || PATHS=(mqtt kafka both)
 for p in "${PATHS[@]}"; do case "$p" in mqtt|kafka|both) ;; *) die "path must be mqtt, kafka or both: $p" ;; esac; done
 [ -n "${NO_SWITCH:-}" ] || [ -n "${AQUARIUS:-}" ] || die "aquarius script not found (AQUARIUS=...)"

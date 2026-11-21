@@ -16,7 +16,7 @@
 # Results are appended to $RESULTS (CSV). Run on an otherwise idle VM, both modes on the same VM.
 #
 # Env (defaults):
-#   DRONES=1  WORLD=baylands  MODEL=gz_x500  AUTOSTART=4001  SPACING=3
+#   DRONES=1  WORLD=kmutt  MODEL=gz_x500  AUTOSTART=4001  SPACING=3
 #   WARMUP=20 (s after ready, before measuring)  DURATION=60 (s measured)  HEADLESS=1 (empty = GUI)
 #   PX4_DIR=~/PX4-Autopilot   COMPOSE_FILE=<this dir>/compose.server.yml   RESULTS=./bench_results.csv
 set -euo pipefail
@@ -24,7 +24,7 @@ export MSYS_NO_PATHCONV=1   # Git Bash on Windows: don't rewrite /px4/..., /worl
 
 MODE=${1:-both}
 DRONES=${DRONES:-1}
-WORLD=${WORLD:-baylands}
+WORLD=${WORLD:-kmutt}
 MODEL=${MODEL:-gz_x500}
 AUTOSTART=${AUTOSTART:-4001}
 SPACING=${SPACING:-3}

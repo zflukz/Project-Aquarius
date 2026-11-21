@@ -6,7 +6,7 @@
 Environment Setup (Docker: VM server + control computer)
       │
       ▼
-PX4 SITL + Gazebo on the VM server  (Baylands world, 1..N drones)
+PX4 SITL + Gazebo on the VM server  (KMUTT world, 1..N drones)
       │  MAVLink UDP  (drone i → control computer :14540+i)
       ▼
 Control computer
@@ -23,7 +23,8 @@ Control computer
 
 Everything Docker / simulator related lives in **`docker/`**:
 **`docker/README.md`** covers every container, port, env var and the multi-drone plan, and
-**`docker/baylands_setup_guide.md`** covers Baylands world caching and troubleshooting.
+The default world is **KMUTT** (`Simulation/`, see `Simulation/README.md`); `docker/baylands_setup_guide.md` covers
+the old Baylands world (`PX4_GZ_WORLD=baylands`).
 
 ## 0. Quick start — `aquarius` command
 
@@ -39,9 +40,9 @@ aquarius init server --control-host <IP> --drones 2   # VM (pull + up)   aquariu
 aquarius drones 4                             # change the number of drones (restarts px4-sim + telemetry)
 aquarius update                               # VM / control: git pull + docker pull + up -d   (local: rebuild)
 
-aquarius start mission 37.4125,-121.9985 37.4128,-121.9992        # fly waypoints (LAT,LON) -> RTL
-aquarius start mission "{37.4125,-121.9985}" --alt 30 --drone 1   # options: --alt --speed --drone --detach
-aquarius start coverage 37.4126,-121.9990 --size 40x30 --drones 2 # MCPP coverage centred on that point
+aquarius start mission 13.6510,100.4940 13.6512,100.4936          # fly waypoints (LAT,LON) -> RTL
+aquarius start mission "{13.6510,100.4940}" --alt 50 --drone 1    # options: --alt --speed --drone --detach
+aquarius start coverage 13.6509,100.4939 --size 40x30 --drones 2  # MCPP coverage centred on that point
 
 aquarius status          # containers + armed / mode / battery / position / GPS
 aquarius rtl | land      # return to launch / land now (stops a running mission script first)
@@ -49,11 +50,11 @@ aquarius logs mission    # follow again (also: coverage, px4, telemetry)
 aquarius urls | down
 ```
 
-- The mission is uploaded to PX4 (QGC shows it). Then: takeoff to `--alt` (default 20 m), waypoints in order,
+- The mission is uploaded to PX4 (QGC shows it). Then: takeoff to `--alt` (default 40 m — KMUTT buildings near home reach ~20-39 m), waypoints in order,
   RTL, land. Points further than 1000 m from home are refused (`MAX_DIST`).
 - It runs in the background inside drone-control, so **Ctrl+C only stops following the log**. The drone keeps
   flying until `aquarius rtl` / `land`.
-- Baylands home is about `37.4122,-121.9989`; 0.0001° lat ≈ 11 m.
+- KMUTT home of drone 0 is about `13.65082,100.49380`; 0.0001° lat ≈ 11 m, 0.0001° lon ≈ 10.8 m.
 
 ---
 
@@ -154,7 +155,7 @@ Same software and the same MAVLink ports as the Docker images (Ubuntu 24.04, Gaz
 ROS 2 Jazzy). Docker stays the main path; native is for running without Docker and for comparing speed.
 
 ```bash
-# VM server: Gazebo Harmonic (apt) + PX4 built + Baylands cache (~30-60 min)
+# VM server: Gazebo Harmonic (apt) + PX4 built (~30-60 min); KMUTT world copied from Simulation/ at run
 bash scripts/install_sim_server.sh
 CONTROL_HOST=<CONTROL_COMPUTER_IP> PX4_NUM_DRONES=1 HEADLESS=1 bash scripts/run_sim_native.sh   # Ctrl+C stops
 
@@ -183,7 +184,7 @@ With Docker the sim starts automatically with `up -d`. Configure it in `.env`
 | `.env` | Example | Effect |
 | :--- | :--- | :--- |
 | `PX4_NUM_DRONES` | `3` | 3 drones, 3 m apart, MAV_SYS_ID 1..3 |
-| `PX4_GZ_WORLD` | `baylands` / `default` | 3D terrain / light flat world |
+| `PX4_GZ_WORLD` | `kmutt` / `baylands` / `default` | KMUTT campus (default) / PX4 park / light flat world |
 | `PX4_SIM_MODEL` + `PX4_SYS_AUTOSTART` | `gz_x500_mono_cam_down` + `4014` | drone with a downward camera (section 4) |
 | `HEADLESS` | `1` | no Gazebo GUI (saves CPU on the VM) |
 
@@ -371,14 +372,14 @@ grid / flown path / drones, status, camera of every drone, pipeline latency. Che
 Project-Aquarius/
 ├── docker/                         everything Docker / simulator
 │   ├── README.md                   containers, port map, publish images, multi-drone roadmap
-│   ├── baylands_setup_guide.md     Baylands world: pre-cache + troubleshooting
+│   ├── baylands_setup_guide.md     old Baylands world (PX4_GZ_WORLD=baylands): cache + troubleshooting
 │   ├── .env.example                REGISTRY, CONTROL_HOST, PX4_NUM_DRONES, PX4_GZ_WORLD, HEADLESS, ...
 │   ├── compose.local.yml           local test: all containers on your computer (+ build & push)
 │   ├── compose.server.yml          VM server: pull images only (sim, telemetry, dashboards, pipeline profile)
 │   ├── telemetry_plan.md           telemetry / camera: what exists, plan, telemetry service (§4)
 │   ├── compose.control.yml         control computer: drone-control
 │   ├── px4-sim/
-│   │   ├── Dockerfile              Gazebo Harmonic + PX4 (pre-built) + Baylands cache + VNC
+│   │   ├── Dockerfile              Gazebo Harmonic + PX4 (pre-built) + KMUTT world + VNC
 │   │   └── entrypoint.sh           starts N PX4 instances, MAVLink links → CONTROL_HOST
 │   ├── telemetry/
 │   │   ├── Dockerfile              ROS 2 Jazzy + XRCE agent + px4_msgs + ros_gz_bridge + web_video + pymavlink
@@ -400,7 +401,7 @@ Project-Aquarius/
 │   └── tools/                      checks, fake drones, demo mission, DDS discovery server, native SITL
 ├── scripts/
 │   ├── aquarius                    CLI: init / pipeline / start mission LAT,LON / start coverage / status / rtl / land
-│   ├── install_sim_server.sh       native VM server install (Gazebo apt + PX4 built + Baylands)
+│   ├── install_sim_server.sh       native VM server install (Gazebo apt + PX4 built)
 │   ├── run_sim_native.sh           native twin of px4-sim/entrypoint.sh (N drones, same ports)
 │   ├── install_telemetry_server.sh native telemetry stack (ROS 2 + XRCE agent + px4_msgs from PX4)
 │   ├── run_telemetry_native.sh     native twin of the telemetry container
@@ -422,7 +423,7 @@ Project-Aquarius/
 Control computer                                    VM server
 teleop_drone.py ─┐                                  ┌─► PX4 instance 0 ─┐
 flight_test.py  ─┤                                  │
-mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (baylands)
+mcpp_mission.py ─┼─► MAVSDK ◄── udp 14540+i ────────┼─► PX4 instance 1 ─┼─► Gazebo (kmutt)
 QGroundControl  ◄────────────── udp 14550 ──────────┘   ...             ─┘
 browser :8083 ◄── telemetry ◄── XRCE agent ◄── PX4 uORB   (VM, same network as px4-sim)
 Grafana :3000 ◄── TimescaleDB ◄── Telegraf ◄── MQTT :1883 ◄── mavlink_mqtt.py ◄── PX4 MAVLink 14740+i

@@ -5,7 +5,7 @@ Script: [`scripts/aquarius`](scripts/aquarius). Full background on the setup: [`
 
 ```bash
 aquarius init                                          # start everything, wait for the drones
-aquarius start mission 37.4125,-121.9985 37.4128,-121.9992
+aquarius start mission 13.6510,100.4940 13.6512,100.4936
 aquarius status
 aquarius rtl
 ```
@@ -52,7 +52,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | Option | Used by | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `--drone N` | start, status, rtl, land, logs | `0` (or `DRONE_ID`) | which drone (drone N = udp 14540+N, MAV_SYS_ID N+1) |
-| `--alt M` | start | `20` | flight altitude in metres above home |
+| `--alt M` | start | `40` | flight altitude in metres above home (KMUTT buildings near home: ~20 m within 60 m, ~39 m at 100 m) |
 | `--speed V` | start | `5` | speed in m/s |
 | `--max-dist M` | start mission | `1000` | refuse waypoints further than this from home |
 | `--detach`, `-d` | start | – | start and return immediately, don't follow the log |
@@ -60,7 +60,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `--sweep M` | start coverage | `5` | distance between flight lines (camera footprint) |
 | `--drones N`, `-n N` | init, start coverage | `1` | `init`: number of simulated drones; `coverage`: drones sharing the area |
 | `--camera` | init | – | drones with a downward camera (`gz_x500_mono_cam_down`) |
-| `--world W` | init | `baylands` | Gazebo world (`default` = flat and light) |
+| `--world W` | init | `kmutt` | Gazebo world (`baylands` = PX4 park, `default` = flat and light) |
 | `--headless` | init | – | no Gazebo GUI (saves CPU) |
 | `--no-files` | update | – | only pull / rebuild images, don't `git pull` / download the compose files |
 | `--control-host IP` | init server | – | IP of the control computer (required on the VM) |
@@ -189,13 +189,13 @@ px4-sim + telemetry** — don't switch mid-flight. Compare them in Grafana **Pat
 ## 4. Fly waypoints — `start mission`
 
 ```bash
-aquarius start mission 37.4125,-121.9985                         # one point
-aquarius start mission 37.4125,-121.9985 37.4128,-121.9992       # several, flown in order
-aquarius start mission "{37.4125,-121.9985}" --alt 30 --speed 3  # braces / spaces are fine (use quotes)
-aquarius start mission 37.4125,-121.9985 --drone 1               # second drone
+aquarius start mission 13.6510,100.4940                          # one point
+aquarius start mission 13.6510,100.4940 13.6512,100.4936         # several, flown in order
+aquarius start mission "{13.6510,100.4940}" --alt 50 --speed 3   # braces / spaces are fine (use quotes)
+aquarius start mission 13.6510,100.4940 --drone 1                # second drone
 ```
 
-Points are **latitude,longitude** in decimal degrees (`37.4125,-121.9985`, not `-121.9985,37.4125`).
+Points are **latitude,longitude** in decimal degrees (`13.6510,100.4940`, not `100.4940,13.6510`).
 
 What happens:
 1. Connects to the drone and reads its home position.
@@ -204,9 +204,9 @@ What happens:
 4. Arms, takes off to `--alt`, flies the points, **returns to launch** and lands.
 
 ```
-[drone0] connected, home 37.412173, -121.998879
-[drone0] waypoint 37.412450,-121.998880: 31 m from home (+31 N, -0 E)
-[drone0] waypoint 37.412450,-121.998500: 45 m from home (+31 N, +33 E)
+[drone0] connected, home 13.650821, 100.493799
+[drone0] waypoint 13.651000,100.494000: 29 m from home (+20 N, +22 E)
+[drone0] waypoint 13.651200,100.493600: 47 m from home (+42 N, -22 E)
 [drone0] mission uploaded (2 waypoints, alt 15 m) — visible in QGroundControl
 [drone0] arming + takeoff ...
 [drone0] mission started
@@ -218,9 +218,9 @@ What happens:
 ```
 
 ### Finding coordinates
-- Baylands (default world) home is about **`37.4122,-121.9989`**.
+- KMUTT (default world) home of drone 0 is about **`13.65082,100.49380`** (drone i is 3·i m further north).
 - **0.0001° latitude ≈ 11 m** north/south; 0.0001° longitude ≈ 9 m east/west (at this latitude).
-  For example, `37.4131,-121.9989` is about 100 m north of home.
+  For example, `13.6517,100.4938` is about 100 m north of home.
 - Easier: click on the QGroundControl map (or Google Maps) and copy the coordinates.
 
 ---
@@ -229,8 +229,8 @@ What happens:
 
 ```bash
 aquarius start coverage                                   # 80 x 60 m around drone 0's home
-aquarius start coverage 37.4126,-121.9990 --size 40x30    # area centred on a point
-aquarius start coverage 37.4126,-121.9990 --drones 2      # two drones split the area (init --drones 2 first)
+aquarius start coverage 13.6509,100.4939 --size 40x30    # area centred on a point
+aquarius start coverage 13.6509,100.4939 --drones 2      # two drones split the area (init --drones 2 first)
 aquarius start coverage --size 60x40 --sweep 8 --alt 25   # wider line spacing, higher
 ```
 
@@ -263,8 +263,8 @@ aquarius status --drone 1    # another drone
 - While a mission is running, `status` only shows that it is running (the mission uses the drone's link). Use `logs`.
 - `--detach` starts a mission without following it, useful for starting several drones:
   ```bash
-  aquarius start mission 37.4125,-121.9985 --drone 0 --detach
-  aquarius start mission 37.4128,-121.9992 --drone 1 --detach --alt 23
+  aquarius start mission 13.6510,100.4940 --drone 0 --detach
+  aquarius start mission 13.6512,100.4936 --drone 1 --detach --alt 43
   aquarius logs mission --drone 1
   ```
 
@@ -279,7 +279,7 @@ aquarius status --drone 1    # another drone
 | Logs / pid | `/tmp/aquarius-<job>-<drone>.{log,pid}` in the container | same paths on this computer |
 
 Scripts used: `Drone-Control/mission_cli.py` (`goto`, `status`, `rtl`, `land`) and `Drone-Control/mcpp_mission.py`
-(coverage). Both can also be run directly, e.g. `python3 mission_cli.py goto 37.4125,-121.9985`.
+(coverage). Both can also be run directly, e.g. `python3 mission_cli.py goto 13.6510,100.4940`.
 
 Env vars: `DRONE_ID` (default drone), `AQUARIUS_DOCKER_DIR` (folder with the compose files and `.env`, default
 `<repo>/docker`, or the current folder on a VM without the repo), `AQUARIUS_BRANCH` (`update` without git).
@@ -293,7 +293,7 @@ Exit codes: `0` = done; `1` = bad input, refused waypoint, mission did not finis
 | Problem | Fix |
 | :--- | :--- |
 | `aquarius: command not found` | `bash scripts/aquarius install`, add `~/.local/bin` to PATH, or use `bash scripts/aquarius` |
-| `PX4 not ready in time` | `aquarius logs px4`. Baylands download or low RAM: try `--world default --headless` |
+| `PX4 not ready in time` | `aquarius logs px4`. Low RAM (KMUTT + Gazebo GUI needs ~3 GB more): try `--headless`, or `--world default` |
 | VM: `pull` → `denied` / `manifest unknown` | images not pushed yet, or GHCR packages private: push from your computer, make them public or `docker login ghcr.io` on the VM |
 | VM: `could not download … (private repo)` | `update` without git needs a public repo — clone the repo on the VM, or `scp` the files and use `--no-files` |
 | VM: still old behaviour after `update` | the images on GHCR are old — rebuild + push from your computer first |

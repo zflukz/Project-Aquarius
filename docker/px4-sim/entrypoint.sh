@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # px4-sim entrypoint
 #   - virtual display + VNC (watch Gazebo through noVNC)
-#   - pre-caches the Gazebo world assets (Baylands) so PX4 does not hang
+#   - Gazebo world: kmutt (default, baked into the image from Simulation/) or a PX4 world; Baylands is
+#     downloaded from Gazebo Fuel once if picked, so PX4 does not hang on "Waiting for Gazebo world"
 #   - starts PX4_NUM_DRONES PX4 SITL instances in one Gazebo world
 #   - opens a MAVLink link per drone towards CONTROL_HOST (the control computer)
 #
 # Env (defaults in Dockerfile):
 #   PX4_NUM_DRONES   number of PX4 instances (drone i = instance i, MAV_SYS_ID i+1)
-#   PX4_GZ_WORLD     Gazebo world, e.g. baylands / default
+#   PX4_GZ_WORLD     Gazebo world: kmutt (KMUTT Bang Mod, default) / baylands / default
+#   DRONE_SPACING    m between drones along y (drone i spawns at DRONE_SPAWN_X, DRONE_SPAWN_Y + i*DRONE_SPACING)
+#   DRONE_SPAWN_X/Y/Z  spawn point of drone 0, world metres (x east, y north, z up); empty = per world:
+#                    kmutt -65 / -53 / 7.5 (clear strip SW of the campus pond), others 0 / 0 / 0
+#   KMUTT_TREES      1 = show the KMUTT trees (heavy for CPU-rendered cameras), default off
 #   PX4_SIM_MODEL    vehicle model, e.g. gz_x500 / gz_x500_depth
 #   PX4_SYS_AUTOSTART airframe id matching the model (gz_x500=4001, gz_x500_depth=4002)
 #   CONTROL_HOST     IP / hostname of the control computer; empty = PX4 defaults (localhost)
@@ -71,6 +76,20 @@ if [ "$PX4_GZ_WORLD" = "baylands" ] && ! compgen -G "$FUEL_DIR/baylands/*/model.
     timeout 900 gz fuel download -v 3 \
         -u "https://fuel.gazebosim.org/1.0/openrobotics/models/Baylands" \
         || echo "WARN: Baylands download failed — Gazebo may hang waiting for the world"
+fi
+
+# KMUTT trees (52k trees, 835k triangles, visual only): CPU rendering of the drone cameras drops RTF from ~0.88
+# to ~0.46 with 2 cameras (0.37 in flight) -> off unless KMUTT_TREES=1. Edits from the original world (*.orig).
+KMUTT_WORLD=/px4/Tools/simulation/gz/worlds/kmutt.sdf
+if [ -f "$KMUTT_WORLD" ]; then
+    [ -f "$KMUTT_WORLD.orig" ] || cp "$KMUTT_WORLD" "$KMUTT_WORLD.orig"
+    if [ "$KMUTT_TREES" = 1 ]; then
+        cp "$KMUTT_WORLD.orig" "$KMUTT_WORLD"
+    else
+        sed 's|<include><uri>model://kmutt_trees</uri></include>|<!-- kmutt_trees off (KMUTT_TREES=1 to enable) -->|' \
+            "$KMUTT_WORLD.orig" > "$KMUTT_WORLD"
+    fi
+    [ "$PX4_GZ_WORLD" = kmutt ] && echo "KMUTT trees: $([ "$KMUTT_TREES" = 1 ] && echo on || echo off)"
 fi
 
 # drone camera size / rate. Gazebo renders sensors on the CPU here (llvmpipe, no GPU) and lockstep
@@ -170,11 +189,20 @@ fi
 TELEM_IP=$(getent ahostsv4 "$TELEM_HOST" | awk 'NR==1 {print $1}')
 TELEM_IP=${TELEM_IP:-$TELEM_HOST}
 
-echo "Starting $PX4_NUM_DRONES x $PX4_SIM_MODEL in world '$PX4_GZ_WORLD' (control: ${CONTROL_IP:-localhost})"
+# spawn point. KMUTT: the world origin (campus centre) is in the campus pond (water is visual only -> drones
+# would stand on the pond bottom under the water surface, camera image white) and next to a 20 m building.
+# x=-65, y=-53..-26 is open ground: >= 6 m from buildings / water for 10 drones at 3 m spacing.
+# The terrain there is 6.8-7.1 m (world z) -> spawn at z 7.5, the drones drop < 0.7 m onto it.
+case "$PX4_GZ_WORLD" in
+    kmutt) SPAWN_X=${DRONE_SPAWN_X:--65}; SPAWN_Y=${DRONE_SPAWN_Y:--53}; SPAWN_Z=${DRONE_SPAWN_Z:-7.5} ;;
+    *)     SPAWN_X=${DRONE_SPAWN_X:-0};   SPAWN_Y=${DRONE_SPAWN_Y:-0};   SPAWN_Z=${DRONE_SPAWN_Z:-0} ;;
+esac
+
+echo "Starting $PX4_NUM_DRONES x $PX4_SIM_MODEL in world '$PX4_GZ_WORLD' (drone0 at $SPAWN_X,$SPAWN_Y,$SPAWN_Z, control: ${CONTROL_IP:-localhost})"
 
 for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
     # instance 0 starts the Gazebo server (+ GUI unless HEADLESS), others join it
-    PX4_GZ_MODEL_POSE="0,$((i * DRONE_SPACING))" \
+    PX4_GZ_MODEL_POSE="$SPAWN_X,$(awk "BEGIN {print $SPAWN_Y + $i * $DRONE_SPACING}"),$SPAWN_Z" \
         "$BIN/px4" -i "$i" -d \
         > >(tee "$LOG_DIR/px4-$i.log" | sed -u "s/^/[drone$i] /") 2>&1 &
     PX4_PIDS+=($!)

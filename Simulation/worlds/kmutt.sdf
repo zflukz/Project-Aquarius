@@ -1,17 +1,17 @@
 <?xml version="1.0"?>
 <sdf version="1.9">
   <world name="kmutt">
-    <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+    <!-- PX4 SITL: same physics as PX4's own worlds (4 ms steps, lockstep at 250 Hz) -->
+    <physics name="4ms" type="ignored">
+      <max_step_size>0.004</max_step_size>
       <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
     </physics>
-    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
-    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
-    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
-    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
-    </plugin>
-    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
+    <!-- no <plugin> tags on purpose: a world with plugins makes Gazebo skip PX4's server.config
+         (GZ_SIM_SERVER_CONFIG_PATH), which loads Physics, Imu, AirPressure, Magnetometer, NavSat, Contact,
+         Sensors (ogre2) and PX4's GstCamera / OpticalFlow systems. Without them PX4 gets no IMU / baro / mag.
+         For plain `gz sim` outside PX4: export GZ_SIM_SERVER_CONFIG_PATH=<PX4>/src/modules/simulation/gz_bridge/server.config
+         (or Gazebo's defaults apply: Physics, UserCommands, SceneBroadcaster). -->
 
     <!-- origin of the world = KMUTT campus centre; lets NavSat/GPS sensors report real lat/lon -->
     <spherical_coordinates>
@@ -29,8 +29,10 @@
       <grid>false</grid>
     </scene>
 
+    <!-- shadows off: without a GPU Gazebo renders on the CPU (llvmpipe) and the shadow pass draws the whole
+         city again for every drone camera frame -> RTF 0.33 with shadows, 0.99 without (1 drone, 640x480 @ 10 Hz) -->
     <light type="directional" name="sun">
-      <cast_shadows>true</cast_shadows>
+      <cast_shadows>false</cast_shadows>
       <pose>0 0 1000 0 0 0</pose>
       <diffuse>0.95 0.92 0.88 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
@@ -41,6 +43,7 @@
     <include><uri>model://kmutt_city</uri></include>
     <include><uri>model://kmutt_trees</uri></include>
 
-    <!-- spawn your robot near the campus centre, e.g. pose 0 0 5.051 -->
+    <!-- PX4 spawns drone i at (-65, -53 + 3*i, 7.5) = open ground SW of the campus pond; the origin itself is in the
+         pond (water is visual only). See DRONE_SPAWN_X/Y/Z in docker/px4-sim/entrypoint.sh -->
   </world>
 </sdf>
