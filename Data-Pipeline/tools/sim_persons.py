@@ -15,13 +15,21 @@ can later be compared with the truth in metres.
 
 Scenario file (JSON):
     {"world": "kmutt", "spawn_z": 7.0,
-     "persons": [{"label": "person_01", "model": "OpenRobotics/Casual female", "x": -75, "y": -60,
+     "persons": [{"label": "person_01", "model": "OpenRobotics/Standing person", "x": -75, "y": -60,
                   "pose": "standing", "yaw": 0.5}, ...]}
 The Mission monitor map shows ground truth only for the selected mission → pass --mission (the bridge prints the
 current one: `docker logs telemetry | grep "bridge up"`); without it the rows have mission_id NULL.
 
 x / y = world metres (x east, y north, ENU, origin = the world's <spherical_coordinates>); "pose" standing | lying
-(lying = rolled 90°); "z" per person overrides "spawn_z". Fuel models are downloaded once inside px4-sim.
+(lying = rolled 90°); "z" per person overrides "spawn_z" and must be the ground height there (people are
+static by default: "static": false per person / file gives them physics again). Fuel models are downloaded once inside px4-sim.
+Use a model that renders in the drone camera: "OpenRobotics/Standing person" does; "Casual female" and
+"Rescue Randy" are in Gazebo but invisible to the camera (checked 2026-11-26 at 10-40 m).
+Lying (rolled) people did not show up in the drone camera at all (even 0.6 m above the ground, 2026-11-26),
+so the default scenario has standing people only; a lying / sitting / half-submerged model is still needed.
+Keep people on open ground: one standing next to a building was hidden by it.
+Static on purpose: "Standing person" collides with its full mesh; against the KMUTT terrain mesh 4 of them
+dropped the sim from RTF 1.0 to 0.1 (and missions timed out). Static models skip that physics.
 
 Runs on the host next to the Docker stack: Gazebo through `docker exec px4-sim gz ...`, the DB through
 `docker exec timescaledb psql` (no password / port needed, no .env read). Containers: --sim / --db-container.
@@ -56,6 +64,7 @@ class Person:
     z: float
     roll: float
     yaw: float
+    static: bool = True
 
 
 def load_scenario(text: str) -> tuple[str, list[Person]]:
@@ -65,6 +74,7 @@ def load_scenario(text: str) -> tuple[str, list[Person]]:
     if not NAME_RE.match(world):
         raise ValueError(f"bad world name {world!r}")
     spawn_z = float(d.get("spawn_z", 7.0))
+    static_default = bool(d.get("static", True))
     out, seen = [], set()
     for i, p in enumerate(d.get("persons", [])):
         label, model = str(p.get("label", "")), str(p.get("model", ""))
@@ -73,7 +83,7 @@ def load_scenario(text: str) -> tuple[str, list[Person]]:
         if label in seen:
             raise ValueError(f"person {i}: label {label!r} used twice")
         if not MODEL_RE.match(model):
-            raise ValueError(f"person {i}: model {model!r} must look like 'OpenRobotics/Casual female'")
+            raise ValueError(f"person {i}: model {model!r} must look like 'OpenRobotics/Standing person'")
         pose = p.get("pose", "standing")
         if pose not in ("standing", "lying"):
             raise ValueError(f"person {i}: pose must be standing or lying, not {pose!r}")
@@ -81,7 +91,8 @@ def load_scenario(text: str) -> tuple[str, list[Person]]:
         if not all(math.isfinite(v) for v in vals):
             raise ValueError(f"person {i}: x / y / z / yaw must be finite numbers")
         seen.add(label)
-        out.append(Person(label, model, vals[0], vals[1], vals[2], math.pi / 2 if pose == "lying" else 0.0, vals[3]))
+        out.append(Person(label, model, vals[0], vals[1], vals[2], math.pi / 2 if pose == "lying" else 0.0, vals[3],
+                          bool(p.get("static", static_default))))
     if not out:
         raise ValueError("no persons in the file")
     return world, out
@@ -94,7 +105,8 @@ def fuel_uri(model: str) -> str:
 
 def spawn_sdf(p: Person) -> str:
     return (f'<sdf version="1.9"><include><uri>{fuel_uri(p.model)}</uri><name>{p.label}</name>'
-            f"<pose>{p.x:g} {p.y:g} {p.z:g} {p.roll:.4f} 0 {p.yaw:.4f}</pose></include></sdf>")
+            f"<pose>{p.x:g} {p.y:g} {p.z:g} {p.roll:.4f} 0 {p.yaw:.4f}</pose>"
+            + ("<static>true</static>" if p.static else "") + "</include></sdf>")
 
 
 def gz_req_string(sdf: str) -> str:

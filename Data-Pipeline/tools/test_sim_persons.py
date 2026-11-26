@@ -52,17 +52,24 @@ class TestScenario(unittest.TestCase):
         world, persons = sp.load_scenario(read(sp.DEFAULT_FILE))
         self.assertEqual(world, "kmutt")
         self.assertEqual([p.label for p in persons], ["person_01", "person_02", "person_03", "person_04"])
-        self.assertEqual(persons[0].z, 7.0)                       # spawn_z
-        self.assertAlmostEqual(persons[2].roll, 1.5708, 3)        # lying
-        self.assertEqual(persons[2].z, 7.2)                       # own z wins
+        self.assertEqual({p.model for p in persons}, {"OpenRobotics/Standing person"})   # the one that renders
+        self.assertEqual(persons[0].z, 6.65)                      # ground height there
+        self.assertTrue(all(p.static for p in persons))           # no mesh physics (RTF)
+        self.assertTrue(all(p.roll == 0 for p in persons))         # lying people don't render yet (see docstring)
+        _, lying = sp.load_scenario(json.dumps({"persons": [{"label": "a", "model": "O/M", "x": 0, "y": 0, "pose": "lying"}]}))
+        self.assertAlmostEqual(lying[0].roll, 1.5708, 3)
+        _, ps = sp.load_scenario(json.dumps({"spawn_z": 5, "persons": [
+            {"label": "a", "model": "O/M", "x": 0, "y": 0}, {"label": "b", "model": "O/M", "x": 0, "y": 0, "z": 6,
+                                                              "static": False}]}))
+        self.assertEqual([(p.z, p.static) for p in ps], [(5.0, True), (6.0, False)])   # spawn_z / own z / static
 
     def test_rejects_bad_input(self):
-        ok = {"model": "OpenRobotics/Casual female", "x": 0, "y": 0}
+        ok = {"model": "OpenRobotics/Standing person", "x": 0, "y": 0}
         for bad, why in [
             ({"persons": [dict(ok, label="a b")]}, "label"),               # space -> not a Gazebo name
             ({"persons": [dict(ok, label="p'; DROP")]}, "label"),          # no SQL / shell characters
             ({"persons": [dict(ok, label="p1"), dict(ok, label="p1")]}, "twice"),
-            ({"persons": [dict(ok, label="p1", model="Casual female")]}, "model"),
+            ({"persons": [dict(ok, label="p1", model="Standing person")]}, "model"),
             ({"persons": [dict(ok, label="p1", pose="sitting")]}, "pose"),
             ({"persons": [dict(ok, label="p1", x=float("nan"))]}, "finite"),
             ({"world": "km utt", "persons": [dict(ok, label="p1")]}, "world"),
@@ -102,8 +109,8 @@ class TestGazeboText(unittest.TestCase):
     def test_spawn_request(self):
         _, persons = sp.load_scenario(read(sp.DEFAULT_FILE))
         sdf = sp.spawn_sdf(persons[0])
-        self.assertIn("<uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Casual female</uri>", sdf)
-        self.assertIn("<name>person_01</name><pose>-75 -60 7 0.0000 0 0.5000</pose>", sdf)
+        self.assertIn("<uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Standing person</uri>", sdf)
+        self.assertIn("<name>person_01</name><pose>-47 -51 6.65 0.0000 0 0.5000</pose><static>true</static>", sdf)
         req = sp.gz_req_string(sdf)
         self.assertTrue(req.startswith('sdf: "<sdf version=\\"1.9\\">'))
         self.assertNotIn("'", req)                                  # safe inside the single-quoted bash arg
