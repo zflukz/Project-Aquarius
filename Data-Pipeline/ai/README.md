@@ -52,7 +52,7 @@ python3 ai_detection.py --detector best.pt --drone uav1      # your trained mode
 | `--drone` | all | only these drones, repeatable |
 | `--group` | `ai-detection` | run 2+ copies with the same group to share the drones |
 | `--from-beginning` | off | start at the oldest kept frame (default: newest) |
-| `--max-lag-s` | 5 | skip frames older than this (catch up after a pause), 0 = never |
+| `--max-lag-s` | 5 | skip frames that waited in Kafka longer than this (catch up after a pause), 0 = never. Measured with the Kafka message time (wall clock), not `ts_us` (sim time in Gazebo, can be a minute behind) |
 | `--evidence-dir` | `$EVIDENCE_DIR` or `Data-Pipeline/results/evidence` | where evidence JPEGs go |
 | `--no-evidence`, `--dry-run` | | |
 
