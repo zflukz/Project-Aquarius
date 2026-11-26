@@ -56,7 +56,9 @@ python3 ai_detection.py --detector best.pt --drone uav1      # your trained mode
 | `--evidence-dir` | `$EVIDENCE_DIR` or `Data-Pipeline/results/evidence` | where evidence JPEGs go |
 | `--no-evidence`, `--dry-run` | | |
 
-Every 10 s it logs `frames, sent (objects), skipped old, bad, avg infer ms`.
+Every 10 s it logs `frames, sent (objects), skipped old, bad, avg infer ms`. `bad` also counts frames whose
+detector raised an error or whose message failed the schema: the frame is skipped (warning in the log) and the
+service keeps running. Objects with NaN / infinite values are dropped before the message is built.
 
 Check the output:
 
