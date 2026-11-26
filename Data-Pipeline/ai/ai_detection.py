@@ -104,8 +104,20 @@ def evidence_path(root: Path, meta: dict) -> Path:
     return Path(root) / meta["drone_id"] / f"{meta['ts_us']}_{meta['frame_id']:06d}.jpg"
 
 
+def sent_time_us(msg, meta: dict) -> int:
+    """Wall-clock time the bridge sent the frame: the Kafka message timestamp (CreateTime, set by the
+    producer), else the frame's ts_us. ts_us is sim time in Gazebo and runs behind the wall clock
+    when RTF < 1 (seen: 57 s behind), so it cannot tell how long a frame waited in Kafka."""
+    try:
+        kind, ms = msg.timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return meta["ts_us"]
+    return int(ms) * 1000 if kind and ms and ms > 0 else meta["ts_us"]   # kind 0 = TIMESTAMP_NOT_AVAILABLE
+
+
 def too_old(ts_us: int, max_lag_s: float, now_s: float | None = None) -> bool:
-    """True if the frame is older than max_lag_s (0 = never skip). Old frames waste GPU time."""
+    """True if ts_us (wall clock, see sent_time_us) is more than max_lag_s ago (0 = never skip).
+    Frames that waited too long in Kafka waste GPU time."""
     if max_lag_s <= 0:
         return False
     now_s = time.time() if now_s is None else now_s
@@ -142,7 +154,8 @@ def main(argv=None):
     ap.add_argument("--drone", action="append", help="only these drone_ids (repeat), default all")
     ap.add_argument("--group", default="ai-detection", help="Kafka consumer group (share it to split the load)")
     ap.add_argument("--from-beginning", action="store_true", help="start at the oldest frame kept (default newest)")
-    ap.add_argument("--max-lag-s", type=float, default=5.0, help="skip frames older than this, 0 = never")
+    ap.add_argument("--max-lag-s", type=float, default=5.0,
+                    help="skip frames sent to Kafka longer ago than this (wall clock), 0 = never")
     ap.add_argument("--evidence-dir", default=os.environ.get("EVIDENCE_DIR", str(HERE.parent / "results" / "evidence")))
     ap.add_argument("--no-evidence", action="store_true", help="do not save evidence JPEGs")
     ap.add_argument("--dry-run", action="store_true", help="print messages, do not send to Kafka")
@@ -177,7 +190,7 @@ def main(argv=None):
                     stats["bad"] += 1
                 elif args.drone and meta["drone_id"] not in args.drone:
                     pass
-                elif too_old(meta["ts_us"], args.max_lag_s):
+                elif too_old(sent_time_us(m, meta), args.max_lag_s):
                     stats["skipped_old"] += 1
                 else:
                     img = decode_jpeg(m.value())

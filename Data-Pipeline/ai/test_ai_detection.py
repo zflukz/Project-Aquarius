@@ -135,6 +135,18 @@ class TestDetectorsAndHelpers(unittest.TestCase):
         self.assertTrue(ai.too_old(META["ts_us"], 5, now + 5.1))
         self.assertFalse(ai.too_old(META["ts_us"], 0, now + 1e6))
 
+    def test_sent_time_uses_kafka_timestamp(self):
+        """Kafka CreateTime (wall clock) wins over ts_us (sim time); ts_us only when there is no timestamp."""
+        class M:
+            def __init__(self, ts): self._ts = ts
+            def timestamp(self): return self._ts
+        sim_meta = dict(META, ts_us=META["ts_us"] - 57_000_000)          # sim clock 57 s behind
+        self.assertEqual(ai.sent_time_us(M((1, META["ts_us"] // 1000)), sim_meta), META["ts_us"])
+        self.assertEqual(ai.sent_time_us(M((0, -1)), sim_meta), sim_meta["ts_us"])   # not available
+        self.assertEqual(ai.sent_time_us(object(), sim_meta), sim_meta["ts_us"])     # no timestamp()
+        now = META["ts_us"] / 1e6
+        self.assertFalse(ai.too_old(ai.sent_time_us(M((1, META["ts_us"] // 1000)), sim_meta), 5, now + 1))
+
     def test_end_to_end_without_kafka(self):
         """JPEG bytes -> decode -> fake detector -> message -> evidence file."""
         data = jpeg()
@@ -162,12 +174,15 @@ class TestLoopWithFakeKafka(unittest.TestCase):
         data = jpeg()
 
         class Msg:
-            def __init__(self, i, ts, drone="uav0"):
-                self.i, self.ts, self.drone = i, ts, drone.encode()
+            # ts = ts_us header (sim time, 60 s behind the wall clock like a slow Gazebo); sent = Kafka CreateTime
+            def __init__(self, i, sent, drone="uav0"):
+                self.i, self.sent, self.drone = i, sent, drone.encode()
+                self.ts = sent - 60_000_000
 
             def error(self): return None
             def key(self): return self.drone
             def value(self): return data
+            def timestamp(self): return (1, self.sent // 1000)
 
             def headers(self):
                 return [("drone_id", self.drone), ("ts_us", str(self.ts).encode()), ("frame_id", str(self.i).encode()),
@@ -215,7 +230,7 @@ class TestLoopWithFakeKafka(unittest.TestCase):
                          [("detections", "uav0", 1), ("detections", "uav1", 1),
                           ("detections", "uav0", 3), ("detections", "uav1", 3)])
         self.assertEqual(len(commits), 9)                     # stale frame committed too, never re-read
-        want = [f"{now_us}_000001.jpg", f"{now_us}_000003.jpg"]
+        want = [f"{now_us - 60_000_000}_000001.jpg", f"{now_us - 60_000_000}_000003.jpg"]   # named by ts_us
         self.assertEqual(files, {"uav0": want, "uav1": want})
 
 
