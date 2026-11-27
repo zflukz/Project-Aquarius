@@ -234,5 +234,84 @@ class TestLoopWithFakeKafka(unittest.TestCase):
         self.assertEqual(files, {"uav0": want, "uav1": want})
 
 
+class TestBadFramesDoNotStop(unittest.TestCase):
+    """A detector crash or a non-finite value skips that frame (counted as bad); the loop keeps going."""
+
+    def test_nan_objects_dropped(self):
+        dets = [Detection("person", float("nan"), 10, 10, 50, 50), Detection("person", 0.8, 10, 10, float("inf"), 50),
+                Detection("person", 0.7, 100, 100, 140, 160)]
+        msg = ai.build_message(META, dets, "m", 640, 480)
+        self.assertEqual([o["conf"] for o in msg["objects"]], [0.7])
+        json.loads(json.dumps(msg))                                   # still valid JSON
+        self.assertIsNone(ai.build_message(META, dets[:2], "m", 640, 480))
+
+    def test_detector_error_skips_frame(self):
+        import os
+        import signal
+        import time
+        import types
+
+        now_us = int(time.time() * 1e6)
+        data = jpeg()
+
+        class Msg:
+            def __init__(self, i): self.i = i
+            def error(self): return None
+            def key(self): return b"uav0"
+            def value(self): return data
+            def timestamp(self): return (1, now_us // 1000)
+            def headers(self):
+                return [("drone_id", b"uav0"), ("ts_us", str(now_us).encode()), ("frame_id", str(self.i).encode()),
+                        ("width", b"640"), ("height", b"480")]
+
+        class Flaky:
+            version = "flaky-v1"
+            def detect(self, image, meta=None):
+                if meta["frame_id"] == 1:
+                    raise RuntimeError("model blew up")
+                return [Detection("person", 0.9, 10, 10, 50, 50)]
+
+        queue = [Msg(i) for i in range(3)]
+        sent, commits = [], []
+
+        class Consumer:
+            def __init__(self, conf): pass
+            def subscribe(self, topics): pass
+            def commit(self, message, asynchronous): commits.append(message)
+            def close(self): pass
+            def poll(self, timeout):
+                if queue:
+                    return queue.pop(0)
+                os.kill(os.getpid(), signal.SIGINT)
+                return None
+
+        class Producer:
+            def __init__(self, conf): pass
+            def produce(self, topic, key, value): sent.append(json.loads(value)["frame_id"])
+            def poll(self, t): pass
+            def flush(self, t): pass
+
+        fake = types.ModuleType("confluent_kafka")
+        fake.Consumer, fake.Producer = Consumer, Producer
+        fake.KafkaException = type("KafkaException", (Exception,), {})   # not RuntimeError: the detector raises that
+        old, old_make = sys.modules.get("confluent_kafka"), ai.make_detector
+        old_int = signal.getsignal(signal.SIGINT)
+        sys.modules["confluent_kafka"] = fake
+        ai.make_detector = lambda spec, conf=0.4: Flaky()
+        try:
+            with tempfile.TemporaryDirectory() as t:
+                rc = ai.main(["--detector", "flaky", "--evidence-dir", t])
+        finally:
+            ai.make_detector = old_make
+            signal.signal(signal.SIGINT, old_int)
+            if old is None:
+                sys.modules.pop("confluent_kafka")
+            else:
+                sys.modules["confluent_kafka"] = old
+        self.assertEqual(rc, 0)
+        self.assertEqual(sent, [0, 2])        # frame 1 skipped, the loop went on
+        self.assertEqual(len(commits), 3)     # the bad frame is committed too, never re-read
+
+
 if __name__ == "__main__":
     unittest.main()

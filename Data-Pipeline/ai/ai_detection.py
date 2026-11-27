@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -87,6 +88,10 @@ def build_message(meta: dict, dets: list[Detection], model_version: str, img_w: 
     """One detections message (schema v1) or None when nothing was found."""
     objects = []
     for d in dets:
+        # NaN / inf would pass the schema's min / max checks (NaN compares false) and json.dumps writes them
+        # as NaN, which is not JSON -> drop such objects here
+        if not all(math.isfinite(float(v)) for v in (d.conf, d.x1, d.y1, d.x2, d.y2)):
+            continue
         x1, y1, x2, y2 = _clip(d.x1, img_w), _clip(d.y1, img_h), _clip(d.x2, img_w), _clip(d.y2, img_h)
         if x2 <= x1 or y2 <= y1:
             continue
@@ -198,14 +203,23 @@ def main(argv=None):
                         stats["bad"] += 1
                     else:
                         stats["frames"] += 1
-                        t0 = time.perf_counter()
-                        dets = detect(img, meta)
-                        stats["infer_ms"] += (time.perf_counter() - t0) * 1000
-                        h, w = img.shape[:2]
-                        msg = build_message(meta, dets, detector.version, w, h)
-                        if msg is not None:
-                            if validator is not None:
+                        try:
+                            t0 = time.perf_counter()
+                            dets = detect(img, meta)
+                            stats["infer_ms"] += (time.perf_counter() - t0) * 1000
+                            h, w = img.shape[:2]
+                            msg = build_message(meta, dets, detector.version, w, h)
+                            if msg is not None and validator is not None:
                                 validator.validate(msg)
+                        except KafkaException:
+                            raise
+                        except Exception as e:   # detector crash, or a message that breaks the schema
+                            stats["bad"] += 1
+                            msg = None
+                            if stats["bad"] <= 5 or stats["bad"] % 100 == 0:
+                                log.warning("%s frame %s skipped (bad #%d): %s: %s", meta["drone_id"],
+                                            meta["frame_id"], stats["bad"], type(e).__name__, str(e)[:200])
+                        if msg is not None:
                             if not args.no_evidence:
                                 p = evidence_path(Path(args.evidence_dir), meta)
                                 p.parent.mkdir(parents=True, exist_ok=True)
