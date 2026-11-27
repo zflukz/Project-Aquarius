@@ -24,7 +24,7 @@ aquarius_bridge:
     telemetry_hz: 10.0
     max_image_fps: 2.0
     image_input: "raw"
-    jpeg_quality: 80
+    jpeg_quality: 95       # 80 lost recall (sim test 2026-11-27: YOLO recall 0.32 at 80, 0.41 at 95, 0.54 lossless)
     px4_time_mode: "estimate_offset"
     # "" = versioned PX4 topic name from the built px4_msgs (MESSAGE_VERSION), see bridge.yaml
     topic_global_position: ""
