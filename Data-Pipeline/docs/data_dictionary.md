@@ -2,11 +2,11 @@
 
 2026-11-19 · Chayuthpong
 
-> Exported from the team's Claude Docs page "Aquarius — Data Dictionary" on 2026-11-19, updated 2026-11-20 (migrations `0001`–`0010`). Source of truth = `docker/db/migrations/`; update this file with every new migration. ER diagram: [`er_diagram.md`](er_diagram.md).
+> Exported from the team's Claude Docs page "Aquarius — Data Dictionary" on 2026-11-19, updated 2026-11-26 (migrations `0001`–`0011`). Source of truth = `docker/db/migrations/`; update this file with every new migration. ER diagram: [`er_diagram.md`](er_diagram.md).
 
 ## ภาพรวมและข้อตกลง
 
-ฐานข้อมูล `aquarius` (image `aquarius-timescaledb` = PostgreSQL 17 + TimescaleDB 2.22.1 + PostGIS 3.5, container `timescaledb` พอร์ต 5432 หรือ `TSDB_PORT`) มี 12 ตารางข้อมูล, 1 view, 2 ตารางระบบ และ 12 ฟังก์ชัน สร้างจาก migration `0001`–`0010` ใน `docker/db/migrations/` (0007 เพิ่มเฉพาะฟังก์ชันของ dashboard, 0008 เพิ่มคอลัมน์ `telemetry.sent_at` สำหรับวัด latency, 0009–0010 เพิ่มคอลัมน์ landed / GPS / health / CPU / mission ใน `telemetry` และตาราง `events` เพื่อให้ทาง Kafka มีข้อมูลเท่าทาง MQTT) เอกสารนี้ตรงกับ migration ชุดนั้น ถ้าเพิ่ม migration ใหม่ต้องแก้เอกสารนี้ด้วย
+ฐานข้อมูล `aquarius` (image `aquarius-timescaledb` = PostgreSQL 17 + TimescaleDB 2.22.1 + PostGIS 3.5, container `timescaledb` พอร์ต 5432 หรือ `TSDB_PORT`) มี 12 ตารางข้อมูล, 1 view, 2 ตารางระบบ และ 12 ฟังก์ชัน สร้างจาก migration `0001`–`0011` ใน `docker/db/migrations/` (0007 เพิ่มเฉพาะฟังก์ชันของ dashboard, 0008 เพิ่มคอลัมน์ `telemetry.sent_at` สำหรับวัด latency, 0009–0010 เพิ่มคอลัมน์ landed / GPS / health / CPU / mission ใน `telemetry` และตาราง `events` เพื่อให้ทาง Kafka มีข้อมูลเท่าทาง MQTT, 0011 เติม `received_at` ให้ตาราง Telegraf รุ่นเก่า) เอกสารนี้ตรงกับ migration ชุดนั้น ถ้าเพิ่ม migration ใหม่ต้องแก้เอกสารนี้ด้วย
 
 ในฐานข้อมูลเดียวกันยังมีตารางของ Telegraf (ทาง MAVLink → MQTT ของ zflukz ที่ dashboard Fleet ใช้) อีก 9 ตาราง: `online`, `status`, `"position"`, `attitude`, `battery`, `gps`, `health`, `mission`, `event` ทุกตารางมี `time`, `fleet`, `drone` (เลข 0, 1, … เป็น text) + field ตาม message สร้างเองตอนมีข้อมูลเข้า ไม่ได้อยู่ใน migration และลบหลัง `TSDB_RETENTION` (30 วัน) ตารางของ pipeline ในเอกสารนี้ไม่โดน retention นี้ เทียบกัน: pipeline ใช้ `drone_id = 'uav0'` ส่วน Telegraf ใช้ `drone = '0'`
 
@@ -33,7 +33,7 @@
 | `persons` | `aq_merge_survivors()` (ingestion เรียก) | `survivors` | 1 แถวต่อผู้ประสบภัย |
 | `search_area`, `grid_cells` | planner ผ่าน `aq_create_search_area()` | mCPP | ครั้งเดียวต่อภารกิจ |
 | `flight_paths` | planner / `aq_save_flown_paths()` | mCPP / telemetry | 1 แถวต่อลำต่อ version |
-| `ground_truth_persons` | สคริปต์โหลด world (Phase F) | Gazebo `pose/info` | ตามจำนวนคนใน world |
+| `ground_truth_persons` | `Data-Pipeline/tools/sim_persons.py` (วางคนใน Gazebo) | Gazebo `pose/info` | ตามจำนวนคนที่วาง |
 
 ## missions
 
@@ -230,12 +230,12 @@ PK รวม `text` ด้วย: ข้อความต่างกันท�
 
 ## ground_truth_persons
 
-ตำแหน่งจริงของคนใน Gazebo world ใช้เทียบกับ `persons` เพื่อวัด georeferencing error เป็นเมตร (F3) ยังไม่มีสคริปต์โหลด (จะอ่านจาก `/world/<world>/pose/info`) · migration 0002
+ตำแหน่งจริงของคนใน Gazebo world ใช้เทียบกับ `persons` เพื่อวัด georeferencing error เป็นเมตร (F3) เขียนโดย `tools/sim_persons.py spawn` / `ground-truth`: วางคนจาก Gazebo Fuel ลงใน sim ที่รันอยู่ อ่านตำแหน่งจริงจาก `/world/<world>/pose/info` แล้ว upsert ตาม (world, label) lat/lon คำนวณจาก `<spherical_coordinates>` ของ world · แผนที่ Mission monitor แสดงเฉพาะแถวที่ `mission_id` ตรงกับภารกิจที่เลือก (ใช้ `--mission`) · migration 0002
 
 | คอลัมน์ | ชนิด | Null | คีย์ / ค่าเริ่มต้น | คำอธิบาย |
 | --- | --- | --- | --- | --- |
 | `gt_id` | BIGSERIAL | ไม่ | PK |  |
-| `world` | TEXT | ไม่ | UNIQUE (world, label) | ชื่อ world เช่น `flood`, `baylands` |
+| `world` | TEXT | ไม่ | UNIQUE (world, label) | ชื่อ world เช่น `kmutt` |
 | `label` | TEXT | ไม่ | UNIQUE (world, label) | ชื่อ model คนใน world |
 | `mission_id` | UUID | ได้ | FK → missions (ลบภารกิจ = NULL) | ภารกิจที่ใช้ world นี้ |
 | `lat`, `lon` | DOUBLE PRECISION | ไม่ |  | ตำแหน่งจริง (°) |
@@ -270,7 +270,7 @@ message จาก Kafka ที่ไม่ผ่านการตรวจ (JSO
 
 ## ตาราง Telegraf (dashboard Fleet)
 
-ทาง MAVLink → MQTT ของ zflukz: `mavlink_mqtt.py` ส่ง MQTT `aquarius/<fleet>/drone/<i>/<stream>` แล้ว Telegraf เขียน 1 stream = 1 ตาราง ไม่มีใน migration — Telegraf สร้างตารางเองเมื่อมีข้อมูลเข้าครั้งแรก แล้วเรียก `aquarius_hypertable()` (จาก init script ใน compose) ให้เป็น hypertable chunk 1 วัน + index `(fleet, drone, time DESC)` + ลบหลัง `TSDB_RETENTION` (ค่าเริ่ม 30 วัน, `''`/`0` = เก็บตลอด) · ไม่มี key ไม่ผูกกับตาราง pipeline
+ทาง MAVLink → MQTT ของ zflukz: `mavlink_mqtt.py` ส่ง MQTT `aquarius/<fleet>/drone/<i>/<stream>` แล้ว Telegraf เขียน 1 stream = 1 ตาราง ไม่มีใน migration — Telegraf สร้างตารางเองเมื่อมีข้อมูลเข้าครั้งแรก แล้วเรียก `aquarius_hypertable()` (จาก init script ใน compose ซึ่งรันเฉพาะตอน volume ว่าง: DB ที่สร้างก่อนหน้าจะไม่มีฟังก์ชันนี้ → Telegraf สร้างตารางไม่ได้และทิ้งข้อมูล, dashboard Fleet ขึ้น `syntax error at or near ")"`) ให้เป็น hypertable chunk 1 วัน + index `(fleet, drone, time DESC)` + ลบหลัง `TSDB_RETENTION` (ค่าเริ่ม 30 วัน, `''`/`0` = เก็บตลอด) · ไม่มี key ไม่ผูกกับตาราง pipeline
 
 คอลัมน์ที่ทุกตารางมี:
 
@@ -279,7 +279,7 @@ message จาก Kafka ที่ไม่ผ่านการตรวจ (JSO
 | `time` | TIMESTAMPTZ | เวลาที่ bridge ส่ง (`t` ใน payload, wall clock ms) |
 | `fleet` | TEXT | `sim` หรือ `real` (`FLEET`) |
 | `drone` | TEXT | เลขโดรน `'0'`, `'1'` … (= pipeline `uav0`, `uav1`; sysid = เลข + 1) |
-| `received_at` | TIMESTAMPTZ | `clock_timestamp()` ตอนเขียนแถว · latency = `received_at − time` (Path compare) |
+| `received_at` | TIMESTAMPTZ | `clock_timestamp()` ตอนเขียนแถว · latency = `received_at − time` (Path compare) · ตารางใหม่ได้จาก create template ของ Telegraf, ตารางเก่าที่ยังไม่มีได้จาก migration 0011 |
 
 field ของแต่ละตาราง (ตัวเลขเป็น DOUBLE PRECISION, ค่าจริง/เท็จเก็บเป็น 0/1, ข้อความเป็น TEXT; field ใหม่ = Telegraf `ADD COLUMN` เอง):
 
@@ -297,7 +297,7 @@ field ของแต่ละตาราง (ตัวเลขเป็น DO
 
 ## ฟังก์ชัน
 
-มี 12 ฟังก์ชัน `aq_*` จาก migration ทุกตัวคำนวณระยะและพื้นที่ใน UTM ของพื้นที่นั้น (ที่ Baylands = 32610, ในไทย = 32647) ส่วน `aquarius_hypertable` มาจาก init script ของ compose ไม่ได้อยู่ใน migration
+มี 12 ฟังก์ชัน `aq_*` จาก migration ทุกตัวคำนวณระยะและพื้นที่ใน UTM ของพื้นที่นั้น (KMUTT / ในไทย = 32647, Baylands = 32610) ส่วน `aquarius_hypertable` มาจาก init script ของ compose ไม่ได้อยู่ใน migration
 
 | ฟังก์ชัน | พารามิเตอร์ (ค่าเริ่มต้น) | คืนค่า | ทำอะไร | ใครเรียก | migration |
 | --- | --- | --- | --- | --- | --- |
@@ -313,7 +313,7 @@ field ของแต่ละตาราง (ตัวเลขเป็น DO
 | `aq_current_area` | `p_mission uuid` | UUID | `search_area` ที่ใหม่ที่สุดของภารกิจ | dashboard Mission | 0007 |
 | `aq_cell_coverage` | `p_area uuid`, `p_swath_m` (0), `p_min_alt_m` (2) | ตาราง `cell_row`, `cell_col`, `lat`, `lon`, `covered` | ทุกช่องกริดพร้อมจุดกลางและว่าบินผ่านแล้วหรือยัง (กฎเดียวกับ `aq_coverage` source flown) | dashboard Mission (แผนที่ coverage, D2) | 0007 |
 | `aq_drone_status` | `p_mission uuid`, `p_window interval` (1 ชม.) | ตาราง `drone_id`, `ts`, `lat`, `lon`, `alt_rel`, `battery_pct`, `battery_voltage`, `nav_state`, `armed`, `speed_ms`, `age_s` + (0009) `landed`, `gps_fix_type`, `gps_satellites`, `health_ok`, `failsafe_flags` + (0010) `cpu_load`, `mission_seq`, `mission_total`, `mission_finished` | แถวล่าสุดต่อลำในภารกิจ (ใช้ PK จึงเร็ว) · `battery_pct` 0–100 · `age_s` = วินาทีตั้งแต่ `received_at` | dashboard Mission (D1) | 0007, เพิ่มคอลัมน์ 0009 / 0010 |
-| `aquarius_hypertable` | `tbl regclass`, `retention text` | void | ทำตารางของ Telegraf ให้เป็น hypertable + index + retention | Telegraf ตอนสร้างตาราง | init script (compose) |
+| `aquarius_hypertable` | `tbl regclass`, `retention text` | void | ทำตารางของ Telegraf ให้เป็น hypertable + index + retention | Telegraf ตอนสร้างตาราง | init script (compose) ไม่ได้อยู่ใน migration · DB ที่สร้างก่อน init script ต้องสร้างเอง (SQL เดียวกับใน compose) |
 
 ## Index และอายุข้อมูล
 

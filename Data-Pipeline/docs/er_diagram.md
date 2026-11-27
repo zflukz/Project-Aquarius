@@ -1,7 +1,7 @@
 # Aquarius — ER Diagram
 
-ตารางของ data pipeline ในฐานข้อมูล `aquarius` (PostgreSQL 17 + TimescaleDB + PostGIS) ตาม migration `0001`–`0010`
-ใน `docker/db/migrations/` (20 พ.ย. 2026) รายละเอียดทุกคอลัมน์, ฟังก์ชัน และ index อยู่ใน
+ตารางของ data pipeline ในฐานข้อมูล `aquarius` (PostgreSQL 17 + TimescaleDB + PostGIS) ตาม migration `0001`–`0011`
+ใน `docker/db/migrations/` (26 พ.ย. 2026; 0011 เพิ่มแค่ `received_at` ในตาราง Telegraf ซึ่งไม่อยู่ในแผนภาพ) รายละเอียดทุกคอลัมน์, ฟังก์ชัน และ index อยู่ใน
 [`data_dictionary.md`](data_dictionary.md) ส่วนหน้าแบบ interactive อยู่ใน Claude artifact "Aquarius ER Diagram"
 
 - **เส้นทึบ** = foreign key จริงในฐานข้อมูล
