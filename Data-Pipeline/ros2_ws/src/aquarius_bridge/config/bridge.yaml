@@ -29,7 +29,7 @@ aquarius_bridge:
     # compressed: camera already publishes sensor_msgs/CompressedImage (JPEG)
     # raw:        sensor_msgs/Image (e.g. straight from ros_gz_bridge); the bridge encodes JPEG
     image_input: "compressed"
-    jpeg_quality: 80
+    jpeg_quality: 95       # 80 lost recall (sim test 2026-11-27: YOLO recall 0.32 at 80, 0.41 at 95, 0.54 lossless)
 
     # A4: how to put PX4 timestamps on the ROS clock
     #   estimate_offset  : PX4 sends µs since boot -> estimate the offset (default, safe)

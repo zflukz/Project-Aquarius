@@ -54,7 +54,7 @@ class BridgeNode(Node):
         p("telemetry_hz", 10.0)
         p("max_image_fps", 2.0)
         p("image_input", "compressed")          # compressed | raw
-        p("jpeg_quality", 80)                   # only for image_input=raw
+        p("jpeg_quality", 95)                   # only for image_input=raw; 95 not 80: see config/bridge.yaml
         p("px4_time_mode", "estimate_offset")   # estimate_offset | already_ros_time
         # "" = derive the versioned name from the built px4_msgs (MESSAGE_VERSION), so it always matches the
         # PX4 the messages were built from (PX4 main bumped vehicle_status_v4 -> _v5 in 2026-11; a fixed _v4
