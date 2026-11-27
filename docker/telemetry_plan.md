@@ -156,7 +156,7 @@ Two different views:
 
 | View | What it is | Today |
 | :--- | :--- | :--- |
-| **Scene view** | Gazebo GUI third-person camera (follows drone `GZ_FOLLOW`) | ✅ noVNC 8080 / 8081 |
+| **Scene view** | Gazebo GUI third-person camera (follows drone `GZ_FOLLOW`) | ✅ VNC 5900 (noVNC removed 2026-11-27) |
 | **Drone camera** | camera sensor on the drone (FPV / downward) | ❌ `gz_x500` has no camera |
 
 ### Step 0 — put a camera on the drone
@@ -172,7 +172,7 @@ PX4 already builds and loads `libGstCameraSystem.so` (`gz_bridge/server.config`,
 `PX4_VIDEO_HOST_IP` (default `127.0.0.1`), port `5600 + instance` (in launch order). `x264enc`, `rtp`,
 `udp` GStreamer plugins are installed in px4-sim; no NVIDIA → software x264.
 
-- Local: default `127.0.0.1:5600` = QGC inside px4-sim → QGC (noVNC 8082) shows the video
+- Local: default `127.0.0.1:5600` = inside px4-sim, nobody watches it (QGC in px4-sim removed 2026-11-27)
   (QGC: Application Settings → Video → Source "UDP h.264 Video Stream", port 5600).
 - Split: set `PX4_VIDEO_HOST_IP=<control computer IP>` in `.env` (passed to px4-sim since 2026-10-17,
   default `127.0.0.1`); open `5600-5609/udp` on the control computer. View with QGC, `ffplay`, VLC or OpenCV:
@@ -199,8 +199,7 @@ runs (px4-sim; needs ROS 2 in that image or a sidecar container sharing the netw
 
 ### C4 — record the scene view (not tested)
 
-`ffmpeg -f x11grab -video_size 1920x1080 -i :99 -r 15 out.mp4` in px4-sim (Gazebo screen) or `:100`
-(QGC). Gazebo GUI also has `/gui/screenshot`. Good for demo videos of a mission.
+`ffmpeg -f x11grab -video_size 1920x1080 -i :99 -r 15 out.mp4` in px4-sim (Gazebo screen). Gazebo GUI also has `/gui/screenshot`. Good for demo videos of a mission.
 
 Order: Step 0 + C1 (see the camera in QGC) → C2 (dataset for MCPP evaluation) → C3 only with ROS 2.
 C3 is done first (2026-10-17) because the `telemetry` container needed ROS 2 anyway.

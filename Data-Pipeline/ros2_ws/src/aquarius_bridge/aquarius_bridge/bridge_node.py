@@ -283,8 +283,12 @@ class BridgeNode(Node):
     def _log_stats(self):
         offs = " ".join(f"{k}:{v.offset_us / 1e6:.3f}s" + (f"(resets {v.resets})" if v.resets else "")
                         for k, v in self.offsets.items() if v.ready)
+        clock = ""
+        if self.epoch.use_sim_time and self.epoch.ready:   # ts vs wall clock (sim slower than real time)
+            clock = f" | sim->wall lag {self.epoch.error_us / 1e6:.2f}s" + (
+                f" (jumps {self.epoch.jumps})" if self.epoch.jumps else "")
         self.get_logger().info(f"[stats] {self.counters.summary_and_reset()} "
-                               f"| kafka errors={self.kafka.take_error_count()} | px4 offset {offs or 'n/a'}")
+                               f"| kafka errors={self.kafka.take_error_count()} | px4 offset {offs or 'n/a'}{clock}")
 
     def destroy_node(self):
         self.kafka.flush(5.0)

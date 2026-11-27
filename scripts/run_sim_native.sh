@@ -2,7 +2,7 @@
 # run_sim_native.sh — start N PX4 SITL drones in one Gazebo world WITHOUT Docker
 #
 # Native twin of docker/px4-sim/entrypoint.sh (same env names, same MAVLink ports), minus the
-# virtual screens / VNC / QGC: with a desktop the Gazebo GUI opens on $DISPLAY, on a server use
+# virtual screen / VNC: with a desktop the Gazebo GUI opens on $DISPLAY, on a server use
 # HEADLESS=1. Ctrl+C stops everything.
 #
 #   CONTROL_HOST=192.168.1.50 PX4_NUM_DRONES=2 HEADLESS=1 bash scripts/run_sim_native.sh
@@ -22,6 +22,8 @@
 #                  unless XRCE=1) — same in run_telemetry_native.sh
 #   CAMERA_WIDTH=640 CAMERA_HEIGHT=480 CAMERA_RATE=10  camera models (edits $PX4_DIR models, original kept as
 #                                                     model.sdf.orig); empty = model default (needs a GPU)
+#   CAMERA_NEAR=0.02  camera near clip  PX4_GZ_WORLD_TIMEOUT=180 (s)  PX4_GZ_SPAWN_TIMEOUT_MS=60000
+#                     (patches $PX4_DIR/build/px4_sitl_default/etc/init.d-posix/px4-rc.gzsim, PX4's own 30 s / 5 s)
 #
 # Telemetry topics + camera view: start scripts/run_telemetry_native.sh in a second terminal
 # (same PX4_NUM_DRONES / PX4_GZ_WORLD / PX4_SIM_MODEL / GZ_PARTITION / ROS_DOMAIN_ID).
@@ -61,22 +63,30 @@ rm -f /tmp/px4_lock-* /tmp/px4-sock-*
 
 # drone camera size / rate — same as docker/px4-sim/entrypoint.sh (1280x960 @ 30 Hz without GPU -> RTF ~0.03)
 CAMERA_WIDTH=${CAMERA_WIDTH-640}; CAMERA_HEIGHT=${CAMERA_HEIGHT-480}; CAMERA_RATE=${CAMERA_RATE-10}
+CAMERA_NEAR=${CAMERA_NEAR-0.02}
 for sdf in mono_cam gimbal OakD-Lite; do
     f="$PX4_DIR/Tools/simulation/gz/models/$sdf/model.sdf"
     [ -f "$f" ] || continue
     [ -f "$f.orig" ] || cp "$f" "$f.orig"
-    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE python3 - "$f.orig" "$f" <<'PY'
+    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE N=$CAMERA_NEAR python3 - "$f.orig" "$f" <<'PY'
 import os, re, sys
 src = open(sys.argv[1]).read()
 def fix(m):   # only <sensor type="camera"> blocks (not imu / depth_camera)
     b = m.group(0)
-    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R')):
+    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R'), ('near', 'N')):
         if os.environ[env]:
             b = re.sub(rf'<{tag}>[^<]*</{tag}>', f'<{tag}>{os.environ[env]}</{tag}>', b, count=1)
     return b
 open(sys.argv[2], 'w').write(re.sub(r'<sensor name="[^"]*" type="camera">.*?</sensor>', fix, src, flags=re.S))
 PY
 done
+
+# PX4's Gazebo world / spawn timeouts (30 s / 5 s) -> env, same as docker/px4-sim/entrypoint.sh
+GZSIM_RC="$PX4_DIR/build/px4_sitl_default/etc/init.d-posix/px4-rc.gzsim"
+if [ -f "$GZSIM_RC" ]; then
+    sed -i -e 's/^ATTEMPTS=30$/ATTEMPTS=${PX4_GZ_WORLD_TIMEOUT:-30}/'         -e '/\/create" --reqtype gz.msgs.EntityFactory/{n;s/--timeout 5000/--timeout ${PX4_GZ_SPAWN_TIMEOUT_MS:-5000}/}'         "$GZSIM_RC"
+fi
+export PX4_GZ_WORLD_TIMEOUT=${PX4_GZ_WORLD_TIMEOUT:-180} PX4_GZ_SPAWN_TIMEOUT_MS=${PX4_GZ_SPAWN_TIMEOUT_MS:-60000}
 
 if [ "$PX4_GZ_WORLD" = baylands ] && ! compgen -G "$FUEL_DIR/baylands/*/model.sdf" > /dev/null; then
     echo "Baylands not cached, downloading from Gazebo Fuel ..."

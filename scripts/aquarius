@@ -16,7 +16,7 @@
 #   aquarius rtl | land [--drone N]      return to launch / land now (stops a running mission script first)
 #   aquarius stop [--drone N]            = rtl
 #   aquarius logs [mission|coverage|px4|telemetry|pipeline] [--drone N]
-#   aquarius urls                        Gazebo / QGC / camera / Grafana / pipeline links
+#   aquarius urls                        camera / Grafana / pipeline links
 #   aquarius down                        stop the containers
 #   aquarius install                     link this script to ~/.local/bin/aquarius
 #
@@ -426,13 +426,11 @@ cmd_path() {   # mqtt | kafka | both — which telemetry stack runs (TELEMETRY_P
 
 cmd_urls() {
     running px4-sim || return 0
-    local h=localhost gz=8080
-    # compose.server.yml: host network, noVNC Gazebo on 8081, links with the VM's address
+    local h=localhost
+    # compose.server.yml: host network -> links with the VM's address
     if [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' px4-sim)" = host ]; then
-        h=$(hostname -I 2>/dev/null | awk '{print $1}'); h=${h:-<VM_IP>}; gz=8081
+        h=$(hostname -I 2>/dev/null | awk '{print $1}'); h=${h:-<VM_IP>}
     fi
-    echo "    Gazebo      http://$h:$gz/vnc.html"
-    echo "    QGC         http://$h:8082/vnc.html"
     if running telemetry; then
         echo "    camera      http://$h:8083/"
     fi
@@ -469,7 +467,7 @@ cmd_start() {
 }
 
 cmd_status() {
-    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|novnc|mosquitto|telegraf|timescaledb|grafana|kafka|ingestion|imagestream" || true
+    docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep -E "px4-sim|telemetry|drone-control|mosquitto|telegraf|timescaledb|grafana|kafka|ingestion|imagestream" || true
     running telemetry && echo "    TELEMETRY_PATH=$(docker exec telemetry printenv TELEMETRY_PATH 2>/dev/null || echo both)   (aquarius path)"
     for j in mission coverage; do
         local p; p=$(job_pid $j)

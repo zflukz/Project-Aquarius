@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # px4-sim entrypoint
-#   - virtual display + VNC (watch Gazebo through noVNC)
+#   - virtual display :99 + VNC server 5900 (Gazebo GUI unless HEADLESS; any VNC client)
 #   - Gazebo world: kmutt (default, baked into the image from Simulation/) or a PX4 world; Baylands is
 #     downloaded from Gazebo Fuel once if picked, so PX4 does not hang on "Waiting for Gazebo world"
 #   - starts PX4_NUM_DRONES PX4 SITL instances in one Gazebo world
@@ -17,8 +17,7 @@
 #   PX4_SYS_AUTOSTART airframe id matching the model (gz_x500=4001, gz_x500_depth=4002)
 #   CONTROL_HOST     IP / hostname of the control computer; empty = PX4 defaults (localhost)
 #   HEADLESS         1 = no Gazebo GUI (saves CPU/GPU on the VM)
-#   QGC              1 = also run QGroundControl on its own virtual display (second noVNC)
-#   SCREEN_SIZE      Xvfb screen, e.g. 1920x1080x24 (Gazebo :99 and QGC :100)
+#   SCREEN_SIZE      Xvfb screen, e.g. 1920x1080x24 (Gazebo :99)
 #   VNC_LISTEN       x11vnc bind address (127.0.0.1 on the VM server)
 #   GZ_FOLLOW        drone index the Gazebo camera follows (default 0, empty = free camera)
 #   PX4_GZ_FOLLOW_OFFSET_X/Y/Z  camera offset from that drone, m (ENU world frame)
@@ -29,6 +28,9 @@
 #   XRCE             1 = keep the uXRCE-DDS client with TELEMETRY_PATH=mqtt (ROS 2 topics / ros2 bag)
 #   CAMERA_WIDTH/HEIGHT/RATE    drone camera models (mono_cam, gimbal, OakD-Lite RGB), default 640x480 @ 10 Hz;
 #                               empty = model default (1280x960 @ 30 -> RTF ~0.03 with software rendering)
+#   CAMERA_NEAR      camera near clip in m, default 0.02 (model default 0.1 clips the ground away while landed)
+#   PX4_GZ_WORLD_TIMEOUT      s PX4 waits for the Gazebo world before giving up, default 180 (PX4's own: 30)
+#   PX4_GZ_SPAWN_TIMEOUT_MS   ms for PX4's spawn call into Gazebo, default 60000 (PX4's own: 5000)
 set -e
 
 BIN=/px4/build/px4_sitl_default/bin
@@ -60,15 +62,12 @@ fi
 # ("PX4 server already running for instance 0", baylands_setup_guide.md issue A)
 pkill -9 -f "$BIN/px4" 2>/dev/null || true
 pkill -9 -f "gz sim" 2>/dev/null || true
-pkill -9 -f /opt/qgc 2>/dev/null || true
 pkill -9 -x Xvfb 2>/dev/null || true
 pkill -9 -x x11vnc 2>/dev/null || true
 pkill -9 -x fluxbox 2>/dev/null || true
 rm -f /tmp/px4_lock-* /tmp/px4-sock-*
 # X locks survive a container restart -> Xvfb "Server is already active" -> no GUI / VNC
-rm -f /tmp/.X99-lock /tmp/.X100-lock /tmp/.X11-unix/X99 /tmp/.X11-unix/X100
-# same for QGC's single-instance lock -> "A second instance of QGroundControl is already running"
-rm -f /tmp/qgc-*.lock
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 
 # pre-cache world assets from Gazebo Fuel (baylands_setup_guide.md section 3)
 if [ "$PX4_GZ_WORLD" = "baylands" ] && ! compgen -G "$FUEL_DIR/baylands/*/model.sdf" > /dev/null; then
@@ -95,17 +94,20 @@ fi
 # drone camera size / rate. Gazebo renders sensors on the CPU here (llvmpipe, no GPU) and lockstep
 # waits for every frame: mono_cam's 1280x960 @ 30 Hz in Baylands dropped RTF to ~0.03, 640x480 @ 10 Hz -> ~1.0.
 # Always edits from the original SDF (*.orig), so changing the env + restart works.
+# CAMERA_NEAR: near clip plane (model default 0.1 m). A landed x500 carries the down camera only ~0.09 m above
+# the ground -> with 0.1 the ground is clipped away and the image is plain sky colour until take-off.
 CAMERA_WIDTH=${CAMERA_WIDTH-640}; CAMERA_HEIGHT=${CAMERA_HEIGHT-480}; CAMERA_RATE=${CAMERA_RATE-10}
+CAMERA_NEAR=${CAMERA_NEAR-0.02}
 for sdf in mono_cam gimbal OakD-Lite; do
     f=/px4/Tools/simulation/gz/models/$sdf/model.sdf
     [ -f "$f" ] || continue
     [ -f "$f.orig" ] || cp "$f" "$f.orig"
-    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE python3 - "$f.orig" "$f" <<'PY'
+    W=$CAMERA_WIDTH H=$CAMERA_HEIGHT R=$CAMERA_RATE N=$CAMERA_NEAR python3 - "$f.orig" "$f" <<'PY'
 import os, re, sys
 src = open(sys.argv[1]).read()
 def fix(m):   # only <sensor type="camera"> blocks (not imu / depth_camera)
     b = m.group(0)
-    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R')):
+    for tag, env in (('width', 'W'), ('height', 'H'), ('update_rate', 'R'), ('near', 'N')):
         if os.environ[env]:
             b = re.sub(rf'<{tag}>[^<]*</{tag}>', f'<{tag}>{os.environ[env]}</{tag}>', b, count=1)
     return b
@@ -113,18 +115,25 @@ open(sys.argv[2], 'w').write(re.sub(r'<sensor name="[^"]*" type="camera">.*?</se
 PY
 done
 case "$PX4_SIM_MODEL" in *cam*|*gimbal*|*depth*)
-    echo "drone camera: ${CAMERA_WIDTH:-default}x${CAMERA_HEIGHT:-default} @ ${CAMERA_RATE:-default} Hz" ;; esac
+    echo "drone camera: ${CAMERA_WIDTH:-default}x${CAMERA_HEIGHT:-default} @ ${CAMERA_RATE:-default} Hz, near clip ${CAMERA_NEAR:-default} m" ;; esac
 
-# one virtual screen + window manager + VNC server per viewer:
-#   :99  -> VNC 5900 -> noVNC "novnc"      Gazebo
-#   :100 -> VNC 5901 -> noVNC "novnc-qgc"  QGroundControl (only with QGC=1)
+# PX4's px4-rc.gzsim waits only 30 s for the Gazebo world ("Timed out waiting for Gazebo world" -> PX4 exits ->
+# container restarts) and gives the spawn call 5 s. The KMUTT world (10 km heightmap + city meshes) loads in ~8 s and
+# a spawn takes ~18 s on a 16-core PC, longer on a busy VM -> raise both (seconds / milliseconds). Patches the copy
+# PX4 runs from the build folder; idempotent (the patterns are gone after the first run, values come from env).
+GZSIM_RC=/px4/build/px4_sitl_default/etc/init.d-posix/px4-rc.gzsim
+if [ -f "$GZSIM_RC" ]; then
+    sed -i -e 's/^ATTEMPTS=30$/ATTEMPTS=${PX4_GZ_WORLD_TIMEOUT:-30}/'         -e '/\/create" --reqtype gz.msgs.EntityFactory/{n;s/--timeout 5000/--timeout ${PX4_GZ_SPAWN_TIMEOUT_MS:-5000}/}'         "$GZSIM_RC"
+    grep -q 'PX4_GZ_WORLD_TIMEOUT' "$GZSIM_RC" || echo "WARN: px4-rc.gzsim world timeout not patched (PX4 changed?)"
+    grep -q 'PX4_GZ_SPAWN_TIMEOUT_MS' "$GZSIM_RC" || echo "WARN: px4-rc.gzsim spawn timeout not patched (PX4 changed?)"
+fi
+export PX4_GZ_WORLD_TIMEOUT=${PX4_GZ_WORLD_TIMEOUT:-180} PX4_GZ_SPAWN_TIMEOUT_MS=${PX4_GZ_SPAWN_TIMEOUT_MS:-60000}
+
+# virtual screen + window manager + VNC server: :99 -> VNC 5900 (Gazebo GUI; the drone cameras also render here)
 DISPLAY_PIDS=()
-# fluxbox: open QGroundControl / Gazebo maximized on their screens
+# fluxbox: open the Gazebo GUI maximized
 mkdir -p ~/.fluxbox
 cat > ~/.fluxbox/apps <<'EOF'
-[app] (name=QGroundControl)
-  [Maximized] {yes}
-[end]
 [app] (name=gz-sim-gui)
   [Maximized] {yes}
 [end]
@@ -139,7 +148,6 @@ start_screen() {   # $1 display, $2 VNC port
     DISPLAY_PIDS+=($!)
 }
 start_screen :99 5900
-if [ "$QGC" = "1" ]; then start_screen :100 5901; fi
 sleep 2
 
 PX4_PIDS=()
@@ -149,7 +157,6 @@ cleanup() {
     echo "Stopping PX4 and Gazebo..."
     kill "${PX4_PIDS[@]}" 2>/dev/null || true
     pkill -f "gz sim" 2>/dev/null || true
-    pkill -f /opt/qgc 2>/dev/null || true
     kill "${DISPLAY_PIDS[@]}" 2>/dev/null || true
     wait
     exit 0
@@ -160,12 +167,16 @@ trap cleanup SIGTERM SIGINT
 # Gazebo world, so the next instance joins this world instead of launching a
 # second gz server). Checks the log: px4-<module> client output (e.g. `mavlink
 # status`) is printed by the daemon, not returned to the caller.
+# Limit = PX4's own world wait + spawn timeout (patched above) + 120 s for the rest of rcS. A fixed 180 s was
+# shorter than PX4's 180 s + 60 s -> on a slow start (seen 2026-11-27: KMUTT, 2 camera drones) instance 0
+# finished booting after we gave up, and its MAVSDK / telemetry links were never opened.
 wait_ready() {
-    for _ in $(seq 1 180); do
+    local limit=$(( PX4_GZ_WORLD_TIMEOUT + PX4_GZ_SPAWN_TIMEOUT_MS / 1000 + 120 ))
+    for _ in $(seq 1 "$limit"); do
         grep -q "Startup script returned successfully" "$LOG_DIR/px4-$1.log" 2>/dev/null && return 0
         sleep 1
     done
-    echo "WARN: PX4 instance $1 not ready after 180 s"
+    echo "WARN: PX4 instance $1 not ready after $limit s"
     return 1
 }
 
@@ -213,7 +224,7 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
         # offboard / MAVSDK link: VM:14640+i <-> control:14540+i
         "$BIN/px4-mavlink" --instance "$i" start -x -f -m onboard -r 4000000 \
             -u $((API_LOCAL_BASE + i)) -t "$CONTROL_IP" -o $((API_REMOTE_BASE + i))
-        # QGroundControl link: VM:18640+i <-> control:14550
+        # QGroundControl link (QGC app on the control computer, optional): VM:18640+i <-> control:14550
         "$BIN/px4-mavlink" --instance "$i" start -x -f -r 4000000 \
             -u $((GCS_LOCAL_BASE + i)) -t "$CONTROL_IP" -o $GCS_REMOTE_PORT
         echo "drone$i (sysid $((i + 1))) -> $CONTROL_IP:$((API_REMOTE_BASE + i)) [MAVSDK], :$GCS_REMOTE_PORT [QGC]"
@@ -241,13 +252,6 @@ for i in $(seq 0 $((PX4_NUM_DRONES - 1))); do
         fi
     fi
 done
-
-# QGroundControl on its own screen :100 (noVNC "novnc-qgc") — not root (QGC refuses), auto-connects on udp 14550.
-# Not in PX4_PIDS: closing QGC does not restart the simulation.
-if [ "$QGC" = "1" ] && [ -x /opt/qgc/AppRun ]; then
-    su qgc -c "DISPLAY=:100 /opt/qgc/AppRun" > "$LOG_DIR/qgc.log" 2>&1 &
-    echo "QGroundControl started (log: $LOG_DIR/qgc.log)"
-fi
 
 # Gazebo camera follows drone $GZ_FOLLOW, so the Gazebo view moves with the drone like QGC's map.
 # PX4's rcS publishes /gui/track once, often before the GUI is up, and gz-gui 8.4 ends up with an

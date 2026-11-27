@@ -64,7 +64,7 @@ aquarius urls | down
  1a LOCAL TEST (your computer)          1b publish             1c SPLIT
  docker/compose.local.yml               compose push           VM server                     Control computer
  px4-sim ─UDP─► drone-control           ──► ghcr.io ──►        docker/compose.server.yml     docker/compose.control.yml
- novnc :8080                                                   (pull image only, no git)     drone-control + QGC
+ Grafana :3000                                                 (pull image only, no git)     drone-control + QGC
 ```
 
 Develop and test locally (1a). When it works, push the images (1b). The VM only pulls and runs them (1c).
@@ -76,11 +76,10 @@ cd docker
 cp .env.example .env                       # first time only
 docker compose -f compose.local.yml up -d --build
 docker compose -f compose.local.yml logs -f px4-sim     # wait for "Ready for takeoff!"
-# Gazebo view: http://localhost:8080/vnc.html   QGroundControl view: http://localhost:8082/vnc.html
 # Dashboard: Grafana http://localhost:3000 (admin/admin)   drone camera: http://localhost:8083/   (section 4)
 ```
 
-`px4-sim`, `novnc`, `telemetry` and `drone-control` all run on your computer. MAVLink takes the same path as in
+`px4-sim`, `telemetry`, the dashboard and `drone-control` all run on your computer. MAVLink takes the same path as in
 the split setup, so a passing local test is a good check before you deploy.
 
 ### 1b. Publish images (from your computer)
@@ -100,7 +99,7 @@ for a package that was never pushed, e.g. `aquarius-grafana`).
 
 ### 1c. Split — VM server (pull only) + control computer
 
-**What runs where:** the VM runs the simulator (`px4-sim`: PX4 ×N + Gazebo + QGC), the noVNC viewers, `telemetry`
+**What runs where:** the VM runs the simulator (`px4-sim`: PX4 ×N + Gazebo), `telemetry`
 **and the dashboard** (`mosquitto`, `timescaledb`, `telegraf`, `grafana` :3000). The control computer runs only
 `drone-control`. The VM never builds — it pulls the images you pushed in 1b.
 
@@ -145,9 +144,75 @@ aquarius status --drone 1
 aquarius update control                              # later: newest drone-control image
 ```
 
-Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8081-8083/tcp` and `3000/tcp` (Grafana) from the control computer.
-The control computer allows `14540-14550/udp` from the VM. Gazebo view: `http://<VM_IP>:8081/vnc.html`, QGroundControl view: `http://<VM_IP>:8082/vnc.html`,
-drone camera: `http://<VM_IP>:8083/`, dashboard: `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (section 4).
+Firewall: the VM allows `14640-14649/udp`, `18640-18649/udp`, `8083/tcp` and `3000/tcp` (Grafana) from the control computer.
+The control computer allows `14540-14550/udp` from the VM. Drone camera: `http://<VM_IP>:8083/`, dashboard: `http://<VM_IP>:3000/d/aquarius-fleet?var-cam=http://<VM_IP>:8083` (section 4).
+
+### 1e. Split over Tailscale — current setup (2026-11-27)
+
+| Machine | Tailscale name / IP | Runs |
+| :--- | :--- | :--- |
+| Server (Linux) | `msi-1` **100.99.66.40** | `compose.server.yml`: px4-sim + Gazebo (KMUTT), telemetry, Grafana stack, pipeline |
+| Control computer (Windows, Docker Desktop) | `msi` **100.81.42.15** | `compose.control.yml`: drone-control (`aquarius start …`) |
+
+PX4 on the server sends drone i to `100.81.42.15:14540+i` (udp); the control computer never connects in, it only
+listens. Checked 2026-11-27 from the control computer: `tailscale ping` OK (via DERP relay Singapore, ~70 ms, no
+direct path yet), ssh 22 open, **3000 / 1883 / 9092 / 8083 closed** → stack not running or firewall (step 2).
+
+**0. Images (control computer, once per change):** the server only pulls. Build + push px4-sim (KMUTT world, camera
+near clip, Gazebo timeouts) and drone-control (40 m default) to the registry in the server's `REGISTRY`:
+`cd docker && docker compose -f compose.local.yml build px4-sim drone-control && docker compose -f compose.local.yml push px4-sim drone-control`.
+Keep `PX4_REF` = the telemetry image's PX4 commit (`0bd95058…` on this PC).
+
+**1. Server `docker/.env`** (ssh `user@100.99.66.40`, in the repo clone `git pull` first) — set these lines:
+
+```bash
+CONTROL_HOST=100.81.42.15        # control computer's Tailscale IP (PX4 sends MAVLink here)
+HOST_IP=100.99.66.40             # links in Grafana (camera 8083, imagestream 8090) + Kafka external address
+PX4_NUM_DRONES=2
+NUM_DRONES=2
+PX4_GZ_WORLD=kmutt
+PX4_SIM_MODEL=gz_x500_mono_cam_down   # down camera = search images (AI / imagestream)
+PX4_SYS_AUTOSTART=4014
+HEADLESS=1                       # Gazebo GUI on demand only (CPU), see change log 2026-11-18
+COMPOSE_PROFILES=pipeline        # Kafka + ingestion + imagestream (camera frames for P6 AI)
+GRAFANA_ADMIN_PASSWORD=<set>     # before the first start (empty volume)
+```
+
+**2. Server firewall** (only if `ufw` is active — `sudo ufw status`): allow the tailnet only, nothing public:
+`sudo ufw allow in on tailscale0`.
+
+**3. Start the server:** `aquarius init server --control-host 100.81.42.15 --drones 2 --camera --headless --pipeline`
+(or `aquarius update` when it already runs). Ready when `docker logs px4-sim` shows
+`drone0 (sysid 1) -> 100.81.42.15:14540` and `drone1 (sysid 2) -> 100.81.42.15:14541`, `near clip 0.02 m`, no
+`Timed out waiting for Gazebo world`.
+
+**4. Control computer** (PowerShell / Git Bash, repo `docker/`):
+
+```bash
+docker compose -f compose.local.yml down          # local stack uses the same container names / udp ports
+aquarius init control                             # drone-control, publishes udp 14540-14549
+aquarius status --drone 0                         # HOLD, FIX_3D, armable yes  (then --drone 1)
+```
+
+Windows Firewall must allow inbound **udp 14540-14549** for Docker Desktop (`com.docker.backend`) on the Tailscale
+network (profile is usually Public). If `status` hangs at `connecting udpin://0.0.0.0:14540`: check
+`docker logs px4-sim` on the server shows `100.81.42.15`, then `docker compose -f compose.control.yml up -d
+--force-recreate drone-control` (Docker Desktop's udp forward can drop a port, change log 2026-11-17).
+
+**5. Search mission (coverage):**
+
+```bash
+aquarius start coverage 13.6509,100.4939 --size 40x30 --drones 2 --alt 40   # area centre lat,lon; split between drones
+aquarius logs coverage                                                        # follow; ends "=== MCPP coverage flight PASSED ==="
+aquarius rtl --drone 0 ; aquarius rtl --drone 1                               # abort: come home
+```
+
+Centre = any point near home (drone 0 home ≈ 13.65082, 100.49380; 0.0001° ≈ 11 m N / 9 m E). Keep `--alt` ≥ 40 m
+near the campus (roofs up to ~47 m within 200 m).
+
+**6. Watch (browser on the control computer):** Grafana `http://100.99.66.40:3000` (Fleet / Mission monitor),
+camera `http://100.99.66.40:8083/`, imagestream `http://100.99.66.40:8090`, kafka-ui `http://100.99.66.40:8084`.
+Gazebo GUI (rarely needed): `ssh -L 5900:127.0.0.1:5900 user@100.99.66.40` + a VNC client on `localhost:5900`.
 
 ### 1d. Native install — no Docker
 
@@ -246,8 +311,7 @@ $DC drone-control python3 mcpp_mission.py --plan-only -n 3                     #
 Or let it start by itself with the container: `AUTO_RUN=python3 mcpp_mission.py` in `docker/.env`
 (see `docker/README.md` → "MCPP coverage flight"). Area / spacing / altitude: `AREA_W`, `AREA_H`,
 `AREA_N`, `AREA_E`, `SWEEP`, `ALT`, `SPEED` (env) or `--help`.
-Watch it: Gazebo <http://localhost:8080/vnc.html>, QGroundControl <http://localhost:8082/vnc.html>
-(VM: ports 8081 / 8082).
+Watch it: Grafana <http://localhost:3000> (Fleet map) or QGroundControl on your own PC (udp 14550).
 
 ### 3b. Keyboard Teleop (manual)
 
@@ -339,8 +403,8 @@ docker exec telemetry with-ros ros2 topic hz /uav_0/camera/image_raw
 
 **4. Other ways to the camera:**
 
-- QGroundControl video: PX4 streams RTP/H.264 to `PX4_VIDEO_HOST_IP:5600+i` (default `127.0.0.1` = QGC
-  in noVNC; set the control computer IP to view it there). QGC → Application Settings → Video → UDP h.264, port 5600.
+- QGroundControl video: PX4 streams RTP/H.264 to `PX4_VIDEO_HOST_IP:5600+i` (default `127.0.0.1`; set the
+  control computer IP to view it in QGC there). QGC → Application Settings → Video → UDP h.264, port 5600.
 - `view_cam.py` (OpenCV window) subscribes `/uav_<DRONE_ID>/camera/image_raw` (or `CAMERA_TOPIC`). It works
   on the VM or on a computer that sees the VM's ROS 2 topics (same LAN + `ROS_DOMAIN_ID`, DDS multicast).
   Across networks use the browser / Grafana views above.

@@ -33,7 +33,7 @@ C database, D dashboard, E survivors / post-mission, F evaluation); M = `communi
 
 | Phase | Work | Owner | Status | Done / missing |
 | :--- | :--- | :--- | :--- | :--- |
-| P0 Simulation | PX4 SITL ×N + Gazebo in Docker, QGC / noVNC, camera model; world **KMUTT** since 2026-11-21 (was Baylands) | us | ✅ | done with Gazebo (user); KMUTT: 2-drone flight PASSED locally, px4-sim image not rebuilt / pushed yet |
+| P0 Simulation | PX4 SITL ×N + Gazebo in Docker, camera model; world **KMUTT** since 2026-11-21 (was Baylands) | us | ✅ | done with Gazebo (user); KMUTT: 2-drone flight PASSED locally, px4-sim image not rebuilt / pushed yet |
 | P1 Infra / deploy | compose local / server / control, GHCR images, `aquarius` CLI, VM pull, split mode | us | 🟡 | running on the VM server but an **old version** → push current images + `aquarius update` on the VM |
 | P2 Area input | user picks the search area | us | 🟡 | map UI done on branch **`FEAT-WEB-DASHBOARD`** (not merged; polygon is only copied to the clipboard, not sent to the planner — see "P2 area input" below); this branch: CLI rectangle `LAT,LON --size WxH` only; DB `search_area` not created for real flights |
 | P3 Central planning (MCPP) | partition + STC per drone → PX4 missions over MAVLink | us | ✅ | **2-drone flight PASSED 2026-11-14** (`aquarius start coverage --size 40x30 --drones 2`, see change log); 1-drone flight PASSED, `--plan-only` 1–4 drones; still missing: polygon area, planned paths not written to `flight_paths`; Grafana checked via DB only (not by eye) |
@@ -204,8 +204,8 @@ Three modes, same images (`ghcr.io/zflukz/aquarius-px4-sim`, `…/aquarius-telem
 
 | Compose file | Runs on | Notes |
 | :--- | :--- | :--- |
-| `docker/compose.local.yml` | your computer | **local test**: px4-sim + novnc (8080 Gazebo) + novnc-qgc (8082 QGC) + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + timescaledb (TimescaleDB + PostGIS, 127.0.0.1:5432) + telegraf + grafana (3000) + drone-control on one bridge network; profile `pipeline`: kafka (9092) + kafka-init + db-migrate + ingestion + imagestream (8090) + kafka-ui (8084); also builds & pushes images |
-| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + novnc (8081) + novnc-qgc (8082) + telemetry (camera 8083) + mosquitto / timescaledb / telegraf / grafana (3000) + profile `pipeline` (same services as local), `network_mode: host` |
+| `docker/compose.local.yml` | your computer | **local test**: px4-sim + telemetry (8083, in px4-sim's netns) + mosquitto (1883/9001) + timescaledb (TimescaleDB + PostGIS, 127.0.0.1:5432) + telegraf + grafana (3000) + drone-control on one bridge network; profile `pipeline`: kafka (9092) + kafka-init + db-migrate + ingestion + imagestream (8090) + kafka-ui (8084); also builds & pushes images |
+| `docker/compose.server.yml` | VM server | **pull-only** (no build, no git): px4-sim + telemetry (camera 8083) + mosquitto / timescaledb / telegraf / grafana (3000) + profile `pipeline` (same services as local), `network_mode: host` |
 | `docker/compose.control.yml` | control computer | drone-control, publishes udp 14540-14549 |
 
 MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/entrypoint.sh`:
@@ -219,8 +219,8 @@ MAVLink (drone `i` = PX4 instance `i` = sysid `i+1`), opened by `docker/px4-sim/
 PX4's own default links (14580+i → localhost:14540+i, 18570+i, 13030+i) still exist; ours are extra. PX4 allows max
 6 MAVLink instances → the entrypoint stops the default onboard-payload link (14280+i) before opening the telemetry link.
 
-`entrypoint.sh` flow: kill stale px4/gz/QGC/Xvfb + `/tmp/px4_lock-*`, X + QGC locks → ensure Baylands Fuel cache →
-Xvfb/fluxbox/x11vnc per screen (`:99`→5900 Gazebo, `:100`→5901 QGC) → for each drone `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`,
+`entrypoint.sh` flow: kill stale px4/gz/Xvfb + `/tmp/px4_lock-*`, X lock → ensure Baylands Fuel cache →
+Xvfb/fluxbox/x11vnc on `:99`→5900 (Gazebo; QGC inside px4-sim removed 2026-11-27) → for each drone `px4 -i i -d` with `PX4_GZ_MODEL_POSE="0,i*DRONE_SPACING"`,
 wait until booted, add the two `mavlink start ... -t CONTROL_IP` links + telemetry link (stop payload link first) → `wait -n`, exit if any
 PX4 dies (Docker restarts the container).
 
@@ -715,7 +715,7 @@ Suggested test order: local build → `flight_test.py` (1 drone) → 2 drones �
   DDS between the machines (T3, not done) — use the browser (8083) / Grafana (3000) across networks.
 - Local: after recreating/restarting px4-sim also `restart telemetry` (`service:px4-sim` netns is not re-joined).
 - `CONTROL_HOST` is resolved once at container start; if the control computer's IP changes, recreate `px4-sim`.
-- noVNC / x11vnc / web_video_server / Mosquitto have no password — keep 8081-8083 / 1883 / 9001 / 3000 on LAN / VPN only.
+- x11vnc / web_video_server / Mosquitto have no password — keep 8083 / 1883 / 9001 / 3000 on LAN / VPN only.
   Grafana default login admin/admin and TimescaleDB dev password → set `GRAFANA_ADMIN_PASSWORD` / `TSDB_PASSWORD` in `.env` on the VM
   before the first start (only applied to empty volumes).
 - GHCR packages are private by default → make public or `docker login` on the VM.
@@ -1141,3 +1141,123 @@ Done on a **different PC** than before (user "Windows 10", Docker Desktop 6 CPU 
   TimescaleDB with variables + `$__timeFilter` / `$__timeGroupAlias` filled in (last 30 min): **50 ok, 0 errors,
   6 empty** — expected empties: Coverage + mission-map layers A (coverage cells), B (planned `flight_paths`),
   E (survivor pins), F (ground truth), survivor table (P2 / P3 / P7 / P8 don't write them yet). Not checked by eye.
+
+## Change log — KMUTT: ground camera "sky" image + Gazebo world timeout (2026-11-26)
+
+User: drones seem to fall into the mesh, camera shows blue / white instead of ground; "Timed out waiting for Gazebo
+world" on the server. Tested on this PC with a test image (`aquarius-px4-sim:kmutt-test` = local 11-17 px4-sim +
+current `Simulation/` + entrypoint; the local px4-sim image had no KMUTT world), 2 × `gz_x500_mono_cam_down`, headless.
+- **Drones do not fall through.** Rest at z 6.837 / 6.854 at (-65, -53 / -50); visible core ground there 6.850 /
+  6.867 (bilinear from `core.obj`) → ~1 cm contact sink, upright, stays put; RTF ~1.0.
+- **Sky image cause = camera near clip.** `mono_cam` camera is 0.10 m above the model origin, near clip 0.1 m → a
+  landed drone's camera is ~0.087 m above the ground → the ground is clipped, image = scene background (mean RGB
+  218/231/249). At 36 m the same camera shows buildings + satellite ground. Fix: `CAMERA_NEAR` (default **0.02**)
+  rewritten into the camera `<clip><near>` with the size / rate (entrypoint, `run_sim_native.sh`, compose ×2,
+  `.env.example`). Verified: landed frames now ground-coloured (mean ~105/108/91).
+- **Timeout:** PX4's `px4-rc.gzsim` waits only 30 s for `/world/<w>/scene/info` (then PX4 exits → entrypoint
+  `wait -n` → container exits → Docker restarts it, Gazebo too — **no manual Gazebo restart needed**, but on a slow VM
+  it can loop) and gives the spawn call 5 s (measured here: world 8 s, spawn **11–18 s**). Entrypoint now `sed`s the
+  build copy `/px4/build/px4_sitl_default/etc/init.d-posix/px4-rc.gzsim` at start: `ATTEMPTS=${PX4_GZ_WORLD_TIMEOUT}`
+  (default **180** s), create `--timeout ${PX4_GZ_SPAWN_TIMEOUT_MS}` (default **60000**); warns if PX4 changed the
+  lines. Verified: patched file, both drones boot. Not reproduced: the actual timeout (this PC loads in 8 s).
+- Needs: rebuild + push `px4-sim` (entrypoint layer only), `aquarius update` on the VM.
+- **Full-stack check (same day):** `compose.local.yml` + scratch override (px4-sim = `aquarius-px4-sim:kmutt-test`,
+  `--no-build`, settings passed as shell env: 2 drones, `gz_x500_mono_cam_down`, kmutt, headless, pipeline; `.env`
+  not read). Log `near clip 0.02 m`, both drones `sysid` links, 0 × "Timed out"; `aquarius status` both FIX_3D 10 sats,
+  armable. `aquarius start coverage --size 40x30 --drones 2` **PASSED twice** (14 / 13 waypoints, RTL, landed, 0
+  leftover `mavsdk_server`). Camera frames: landed = ground texture (no more sky), in flight = buildings + satellite
+  ground. Data: Telegraf `position` max alt 20.3 / 23.2 m, Kafka → `telemetry` 3324 / 3323 rows, 0 `ingest_rejects`,
+  bridge `kafka errors=0`. **Note:** flights went to **20 / 23 m**, not 40 m → the local `drone-control` image
+  (11-17, before the 40 m default) and / or `ALT` in the user's `.env` — at KMUTT 20 m is below nearby roofs.
+
+## Change log — split over Tailscale: runbook (2026-11-27)
+
+User: server now at Tailscale **100.99.66.40** (`msi-1`, Linux), wants the steps to start a search (coverage) mission.
+Control computer = this PC, Tailscale **100.81.42.15** (`msi`). Checked from here: `tailscale ping` OK via DERP `sin`
+(~70 ms, no direct path), ssh 22 open, 3000 / 1883 / 9092 / 8081-8083 / 5900 closed (stack down or firewall; not
+logged in to the server). Windows firewall check was not allowed in this session → user checks udp 14540-14549 inbound.
+Runbook written: `WORKFLOW.md` → **1e** (server `.env` lines `CONTROL_HOST=100.81.42.15`, `HOST_IP=100.99.66.40`, 2
+camera drones, kmutt, headless, pipeline; `ufw allow in on tailscale0`; `init server`; control `init control`;
+`aquarius start coverage … --drones 2 --alt 40`; URLs). No code change. Not tested end to end.
+
+## Change log — noVNC removed (2026-11-27)
+
+User: noVNC is never used → remove it. Asked the scope: user chose **only noVNC** (Xvfb / x11vnc / fluxbox, the
+Gazebo GUI option and QGC inside px4-sim stay; px4-sim image unchanged, no rebuild).
+- `compose.local.yml` / `compose.server.yml`: services `novnc` + `novnc-qgc` (`dougw/novnc`, ports 8080 / 8081 /
+  8082) deleted, header / env comments updated. `config -q` OK for both.
+- `scripts/aquarius`: `urls` no longer prints Gazebo / QGC links, `status` filter without `novnc`; `bash -n` OK.
+- Comments only: `px4-sim/entrypoint.sh`, `px4-sim/Dockerfile` (comment lines don't change the build cache),
+  `.env.example`, `.env.prod`. Docs: `AQUARIUS_CLI.md`, `WORKFLOW.md` (1a / 1c / 1e / MCPP, firewall ports now 8083
+  only), `docker/README.md`, `telemetry_plan.md`. Older change-log entries above still mention noVNC — history.
+- Viewing Gazebo / QGC now (rarely needed): VM → `ssh -L 5900:127.0.0.1:5900 user@<VM>` (5901 = QGC) + any VNC client;
+  locally 5900 / 5901 are not published. Old `novnc` / `novnc-qgc` containers: `docker compose … up -d --remove-orphans`
+  (`aquarius update` already does that).
+
+## Change log — QGroundControl removed from px4-sim (2026-11-27)
+
+User: QGC is not used (missions start with the `aquarius` CLI, monitoring in Grafana, Gazebo GUI runs in WSL against
+the server's Gazebo over gz-transport) → remove QGC. Removed only the QGC **inside px4-sim**:
+- `px4-sim/Dockerfile`: QGC AppImage layer, `ENV QGC=1`, `EXPOSE 5901`. Earlier layers (apt, Gazebo, PX4 build)
+  stay cached → rebuild redoes only KMUTT copy / ENV / entrypoint (still needs a rebuild + push for the VM).
+- `px4-sim/entrypoint.sh`: screen `:100` + x11vnc 5901, QGC start, QGC kill / lock cleanup. Gazebo screen `:99`
+  + VNC 5900 + `HEADLESS` unchanged.
+- `compose.local.yml` / `compose.server.yml`: `QGC` env line; `.env.example` / `.env.prod`: `QGC=1`;
+  `bench_sim.sh`: `QGC=0`. Docs: `docker/README.md`, `WORKFLOW.md` (1e `.env` list), `telemetry_plan.md`,
+  `run_sim_native.sh` comment, `AQUARIUS_CLI.md` (`urls`).
+- **Kept on purpose:** PX4's QGC MAVLink link `18640+i → CONTROL_HOST:14550` (a QGC app on the control computer
+  still works if ever opened; costs nothing), `PX4_VIDEO_HOST_IP`. A leftover `QGC=` line in a `.env` is ignored.
+- Checked: `bash -n` entrypoint / bench / native script, `compose config -q` local + server.
+- **Tested locally (same day):** `docker build` → test tag `aquarius-px4-sim:noqgc-test` (apt / Gazebo / PX4 clone +
+  build CACHED, ~2 min, PX4 `f364b94f` = current image); `compose.local.yml` + scratch override (image only), settings
+  as shell env (2 × `gz_x500_mono_cam_down`, kmutt, `HEADLESS=1`, no pipeline; `.env` not read). No `/opt/qgc`, no QGC
+  process, only `:99` Xvfb + x11vnc 5900. Clean `down` + `up`: both drones linked in ~3 min, 0 restarts; `aquarius
+  status` both FIX_3D 10 sats armable; `aquarius start coverage 13.6509,100.4939 --size 40x30 --drones 2 --alt 40`
+  **PASSED** (2 min 36 s, 7 + 9 waypoints, RTL, landed, 0 leftover `mavsdk_server`); camera snapshots 200 for uav0 /
+  uav1; Telegraf `position` 2530 / 2302 rows, max alt 40.2 / 43.2 m. Image not pushed; user's image tag untouched.
+- **Bug found + fixed — `wait_ready` 180 s too short:** first start, drone 0's rcS finished *after* the entrypoint's
+  fixed 180 s → `WARN: PX4 instance 0 not ready`, drone 0 got no MAVSDK / telemetry link (drone 1 fine). PX4 itself
+  may take `PX4_GZ_WORLD_TIMEOUT` 180 s + spawn 60 s (2026-11-26 change). Now `wait_ready` limit =
+  `PX4_GZ_WORLD_TIMEOUT + PX4_GZ_SPAWN_TIMEOUT_MS/1000 + 120` (360 s default). Retest: drone 0 needed > 180 s again
+  and linked.
+- **Seen again, not fixed (old bug, 2026-11-08):** recreating `telemetry` next to a running px4-sim made PX4
+  **segfault** twice in a row (uXRCE agent reconnect) → Docker restarts px4-sim → telemetry sits in the dead netns →
+  needs another recreate. Reliable path: full `down` + `up` (or `aquarius init`), not telemetry alone.
+- Note: an attempted larger rework in this session (always-headless px4-sim, `QGC_HOST`, a `gz-gui` compose service)
+  was **reverted** at the user's request — the user runs the Gazebo GUI in WSL, not in Docker.
+
+## Change log — uXRCE path / Mission monitor check: sim-time `ts` drift fixed in the bridge (2026-11-27)
+
+User: telemetry over uXRCE and the Mission monitor dashboard have problems → check. Local test stack (test images
+`aquarius-px4-sim:noqgc-test`, then `aquarius-telemetry:drift-test`; 2 × `gz_x500_mono_cam_down`, kmutt, headless,
+profile pipeline; settings as shell env, `.env` not read).
+- **Healthy:** XRCE agent sessions for both drones, 70 `/fmu/out` topics (`vehicle_status_v5` etc.), bridge
+  `px4 topics=[…11 topics…]`, 200 telemetry msgs / 10 s, kafka errors 0, 6 topics, migrations up to 0011, ingestion
+  writes, 0 `ingest_rejects`, nav_state / armed / GPS / CPU / mission / events filled; flight → events Armed … Disarmed,
+  mission 15/15 + 19/19 finished. All 29 Mission monitor panel SQLs (scratchpad `check_dash.py`, macros + variables
+  filled in, run in psql): 23 ok, 0 errors, 6 empty = expected (coverage, planned paths, survivor pins, ground truth:
+  nothing writes them yet — P2 / P3 / P7 / P8).
+- **Problem found:** Kafka-path `ts` = sim time + an offset taken **once** (`EpochMapper`). Sim runs slower than real
+  time (RTF ~0.9 idle, ~0.73 with 2 cameras flying) → `received_at − ts` grew 3.7 → 9.6 → 21.5 → 37.6 → 53.9 s per
+  minute, without limit → every Mission monitor panel (filters / plots on `ts`) showed old data, right edge empty, short
+  time ranges went blank; events earlier than on MQTT. (Latency panel fine: `received_at − sent_at`.) Real drones not
+  affected (ROS clock = UTC). Also why the bridge sends ~7 Hz wall instead of 10 Hz (10 Hz of sim time).
+- **Fix (user chose "bridge re-syncs"):** `Data-Pipeline/ros2_ws/src/aquarius_bridge/aquarius_bridge/core.py`
+  `EpochMapper` keeps the offset near the wall clock: deadband 0.5 s, beyond it the offset slews by ≤ 0.5 × elapsed
+  wall time (smooth, monotonic for RTF > 0.5), > 10 s → one jump (pause / start-up); counters `jumps`, `error_us`;
+  Gazebo-restart re-latch unchanged. `bridge_node.py` stats line adds `sim->wall lag X s (jumps N)`.
+  `test/test_core.py`: "latches once" test replaced by first-clock / follows-wall-clock (RTF 0.73, 10 min, stays
+  < 1 s, strictly increasing) / big-gap jump / Gazebo-restart tests → **34/34 OK** (python:3.12-slim, Data-Pipeline mounted).
+  Meaning of `ts` for the data team: in the sim it now tracks wall clock (±~0.5 s, slewed), not exact sim spacing.
+- **Verified:** overlay image (`aquarius-telemetry:latest` + the two .py files in
+  `/opt/aquarius_ws/install/aquarius_bridge/lib/python3.12/site-packages/aquarius_bridge/`), clean `down` + `up`:
+  bridge lag 0.5 s idle, ≤ 4.9 s at sim stalls then back to 0.5; DB `received_at − ts` avg 1.2–3.7 s / max ~8 s per
+  minute, **not growing**; 0 non-increasing `ts`; coverage flight PASSED; 0 rejects; dashboard 23 ok / 0 errors.
+- **Not done:** real `telemetry` image build — the ROS apt layer is **no longer in the build cache** → full rebuild
+  (30–60+ min, OOM risk; `BUILD_JOBS`), then push + `aquarius update` on the VM. Stopping `docker compose build` from
+  the client did **not** stop BuildKit: an orphan `apt-get install ros-jazzy-…` kept running and made the next sim start
+  take ~9 min (killed via a privileged `--pid=host` container).
+- **Seen:** under that load drone 0 needed > 360 s and then PX4 **segfaulted** after `uxrce_dds_client create entities
+  failed: participant: 255` / `session setup failed` — same PX4 uXRCE reconnect crash as 2026-11-08, now also at start
+  under heavy load. Clean restart on an idle machine: drone 0 3.5 min, drone 1 +2.5 min, no crash.
+

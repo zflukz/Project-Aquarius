@@ -65,14 +65,43 @@ class TestTime(unittest.TestCase):
         self.assertTrue(m.ready)
         self.assertEqual(m.to_epoch_us(1_791_000_000_000_000), 1_791_000_000_000_000)
 
-    def test_epoch_sim_time_latches_once(self):
+    def test_epoch_sim_time_latches_on_first_clock(self):
         m = EpochMapper(use_sim_time=True)
         m.latch(wall_now_us=1_791_000_000_000_000, ros_now_us=0)   # /clock not yet received
         self.assertFalse(m.ready)
         m.latch(wall_now_us=1_791_000_000_000_000, ros_now_us=12_000_000)
-        m.latch(wall_now_us=1_791_000_999_000_000, ros_now_us=13_000_000)  # ignored
+        m.latch(wall_now_us=1_791_000_000_300_000, ros_now_us=12_200_000)  # 0.1 s drift: inside deadband
         self.assertEqual(m.to_epoch_us(12_000_000), 1_791_000_000_000_000)
         self.assertEqual(m.to_epoch_us(12_100_000), 1_791_000_000_100_000)
+
+    def test_epoch_follows_wall_clock_when_sim_is_slow(self):
+        # RTF 0.73 for 10 min (the 2-camera flight of 2026-11-27): a constant offset fell 54 s behind in 5 min
+        wall0, m = 1_791_000_000_000_000, EpochMapper(use_sim_time=True)
+        m.latch(wall0, 5_000_000)
+        prev = None
+        for i in range(1, 6001):                          # 10 Hz for 600 s of wall time
+            wall, ros = wall0 + i * 100_000, 5_000_000 + int(i * 100_000 * 0.73)
+            m.latch(wall, ros)
+            ts = m.to_epoch_us(ros)
+            self.assertLess(abs(wall - ts), 1_000_000)    # stays within ~deadband of real time
+            if prev is not None:
+                self.assertGreater(ts, prev)              # smooth, never backwards
+            prev = ts
+        self.assertEqual(m.jumps, 0)
+
+    def test_epoch_big_gap_jumps_at_once(self):
+        wall0, m = 1_791_000_000_000_000, EpochMapper(use_sim_time=True)
+        m.latch(wall0, 5_000_000)
+        m.latch(wall0 + 60_000_000, 6_000_000)            # sim paused ~59 s
+        self.assertEqual(m.jumps, 1)
+        self.assertEqual(m.to_epoch_us(6_000_000), wall0 + 60_000_000)
+
+    def test_epoch_relatches_when_gazebo_restarts(self):
+        wall0, m = 1_791_000_000_000_000, EpochMapper(use_sim_time=True)
+        m.latch(wall0, 500_000_000)
+        m.latch(wall0 + 1_000_000, 2_000_000)             # sim clock back near 0
+        self.assertEqual(m.relatches, 1)
+        self.assertEqual(m.to_epoch_us(2_000_000), wall0 + 1_000_000)
 
     def test_not_ready_before_min_samples(self):
         est = ClockOffsetEstimator(min_samples=20)

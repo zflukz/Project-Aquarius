@@ -41,20 +41,9 @@ RUN make px4_sitl_default
 COPY dds_topics_extra.yaml patch_dds_topics.sh /tmp/
 RUN bash /tmp/patch_dds_topics.sh && make px4_sitl_default
 
-# QGroundControl on its own virtual display :100 -> VNC 5901 -> second noVNC (QGC=1).
-# AppImage is extracted (no FUSE in Docker); QGC refuses to run as root -> user "qgc".
-# It auto-connects via PX4's default GCS link (18570+i -> localhost:14550).
-ARG QGC_VERSION=v5.1.5
-RUN wget -q "https://github.com/mavlink/qgroundcontrol/releases/download/${QGC_VERSION}/QGroundControl-x86_64.AppImage" \
-        -O /tmp/qgc.AppImage && \
-    chmod +x /tmp/qgc.AppImage && \
-    cd /opt && /tmp/qgc.AppImage --appimage-extract > /dev/null && \
-    mv /opt/squashfs-root /opt/qgc && rm /tmp/qgc.AppImage && \
-    useradd -m -G dialout qgc && chown -R qgc:qgc /opt/qgc
-
 # KMUTT world (repo folder Simulation/, compose additional context "simulation") -> PX4's world / model
 # folders: px4-rc.gzsim starts $PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf and both folders are on GZ_SIM_RESOURCE_PATH
-# (gz_env.sh), so model://kmutt_* resolves. Last layers before ENV: a map change does not rebuild PX4 / QGC.
+# (gz_env.sh), so model://kmutt_* resolves. Last layers before ENV: a map change does not rebuild PX4.
 # Baylands is no longer pre-cached; PX4_GZ_WORLD=baylands still works (entrypoint downloads it once into the
 # gz-fuel-cache volume).
 COPY --from=simulation models/ /px4/Tools/simulation/gz/models/
@@ -72,15 +61,14 @@ ENV PX4_SIM_MODEL=gz_x500 \
     KMUTT_TREES= \
     CONTROL_HOST= \
     HEADLESS= \
-    QGC=1 \
     SCREEN_SIZE=1920x1080x24 \
     VNC_LISTEN=0.0.0.0
 
 # per drone i: PX4 listens on 14640+i and sends to CONTROL_HOST:14540+i (MAVSDK)
-#              PX4 listens on 18640+i and sends to CONTROL_HOST:14550   (QGroundControl)
+#              PX4 listens on 18640+i and sends to CONTROL_HOST:14550   (QGroundControl app there, optional)
 EXPOSE 14640-14649/udp
 EXPOSE 18640-18649/udp
-EXPOSE 5900 5901
+EXPOSE 5900
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

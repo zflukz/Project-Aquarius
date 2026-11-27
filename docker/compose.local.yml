@@ -1,4 +1,4 @@
-# LOCAL TEST — everything on your computer: px4-sim + novnc + telemetry + dashboard + drone-control.
+# LOCAL TEST — everything on your computer: px4-sim + telemetry + dashboard + drone-control.
 # Also the place where images are built and pushed for the VM server.
 #
 #   cd docker
@@ -38,17 +38,19 @@ services:
       - DRONE_SPAWN_Z=${DRONE_SPAWN_Z:-}
       - KMUTT_TREES=${KMUTT_TREES:-}           # 1 = KMUTT trees on (RTF ~0.9 -> ~0.4 with 2 cameras)
       - HEADLESS=${HEADLESS:-}
-      - QGC=${QGC:-1}                       # QGroundControl in its own noVNC (:8082)
       - SCREEN_SIZE=${SCREEN_SIZE:-1920x1080x24}
       - GZ_FOLLOW=${GZ_FOLLOW-0}            # Gazebo camera follows drone N (empty = free camera)
       - GZ_PARTITION=${GZ_PARTITION:-aquarius}   # Gazebo transport partition, same in telemetry
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}        # PX4 uXRCE-DDS domain, same in telemetry
-      # drone camera models: GstCameraSystem streams RTP/H.264 to this IP, udp 5600+i (127.0.0.1 = QGC in noVNC)
+      # drone camera models: GstCameraSystem streams RTP/H.264 to this IP, udp 5600+i (set the control computer IP to watch it in a QGC there)
       - PX4_VIDEO_HOST_IP=${PX4_VIDEO_HOST_IP:-127.0.0.1}
       # drone camera size / rate (CPU rendering: 1280x960@30 -> RTF ~0.03), empty = model default
       - CAMERA_WIDTH=${CAMERA_WIDTH-640}
       - CAMERA_HEIGHT=${CAMERA_HEIGHT-480}
       - CAMERA_RATE=${CAMERA_RATE-10}
+      - CAMERA_NEAR=${CAMERA_NEAR-0.02}         # near clip m (0.1 hid the ground while landed -> sky-coloured image)
+      - PX4_GZ_WORLD_TIMEOUT=${PX4_GZ_WORLD_TIMEOUT:-180}        # s PX4 waits for the world (PX4's own 30)
+      - PX4_GZ_SPAWN_TIMEOUT_MS=${PX4_GZ_SPAWN_TIMEOUT_MS:-60000} # PX4 spawn call (PX4's own 5000)
       - TELEM=${TELEM:-1}                   # 3rd MAVLink link 14740+i -> 127.0.0.1:14700 (telemetry -> MQTT)
       - TELEMETRY_PATH=${TELEMETRY_PATH:-both}   # mqtt | kafka | both (kafka = no MQTT link; aquarius path)
       - XRCE=${XRCE:-}                      # 1 = keep uXRCE-DDS (ROS 2 /fmu/out) with TELEMETRY_PATH=mqtt
@@ -58,32 +60,6 @@ services:
       - gz-fuel-cache:/root/.gz/fuel        # Gazebo Fuel downloads (Baylands if picked); kmutt is in the image
     stop_grace_period: 10s
     restart: unless-stopped
-
-  novnc:
-    image: dougw/novnc
-    container_name: novnc
-    networks:
-      - drone-net
-    ports:
-      - "8080:8081"                         # Gazebo: http://localhost:8080/vnc.html
-    environment:
-      - REMOTE_HOST=px4-sim
-      - REMOTE_PORT=5900
-    depends_on:
-      - px4-sim
-
-  novnc-qgc:
-    image: dougw/novnc
-    container_name: novnc-qgc
-    networks:
-      - drone-net
-    ports:
-      - "8082:8081"                         # QGroundControl: http://localhost:8082/vnc.html
-    environment:
-      - REMOTE_HOST=px4-sim
-      - REMOTE_PORT=5901
-    depends_on:
-      - px4-sim
 
   telemetry:
     build:

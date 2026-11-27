@@ -43,7 +43,7 @@ Without installing, run `bash scripts/aquarius ...` from the repo.
 | `aquarius rtl` (= `aquarius stop`) | return to launch now |
 | `aquarius land` | land where it is now |
 | `aquarius logs [mission\|coverage\|px4\|telemetry\|pipeline]` | follow a log (default `mission`; `pipeline` = bridge + ingestion) |
-| `aquarius urls` | links to Gazebo, QGroundControl, camera, Grafana (+ Mission dashboard and Kafka UI when the pipeline runs) |
+| `aquarius urls` | links to camera, Grafana (+ Mission dashboard and Kafka UI when the pipeline runs) |
 | `aquarius down` | stop all containers |
 | `aquarius install` | put the command on your PATH |
 
@@ -86,8 +86,6 @@ the last drone is connected. Then it prints the links:
 ```
 drone0 (sysid 1) -> 172.19.0.2:14540 [MAVSDK], :14550 [QGC]
 >>> ready — 1 drone(s)
-    Gazebo      http://localhost:8080/vnc.html
-    QGC         http://localhost:8082/vnc.html
     camera      http://localhost:8083/
     Grafana     http://localhost:3000/d/aquarius-fleet?var-cam=http://localhost:8083
 ```
@@ -105,9 +103,9 @@ aquarius init control
 aquarius status
 ```
 
-The VM runs px4-sim (PX4 + Gazebo), the noVNC viewers, telemetry **and the Grafana stack** (mosquitto, timescaledb,
+The VM runs px4-sim (PX4 + Gazebo), telemetry **and the Grafana stack** (mosquitto, timescaledb,
 telegraf, grafana); the control computer runs only drone-control. On the VM `urls` prints the VM's own address:
-`http://<VM_IP>:8081/vnc.html` (Gazebo), `:8082` (QGC), `:8083` (camera), `http://<VM_IP>:3000` (Grafana, login
+`http://<VM_IP>:8083` (camera), `http://<VM_IP>:3000` (Grafana, login
 `admin` / `GRAFANA_ADMIN_PASSWORD`). Firewall ports are listed in `docker/README.md`.
 
 `init` saves the mode (`AQUARIUS_MODE=server`) in `.env`, so `drones` / `update` on the VM never build or start

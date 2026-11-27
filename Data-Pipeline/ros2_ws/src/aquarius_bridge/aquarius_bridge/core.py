@@ -148,26 +148,52 @@ class EpochMapper:
 
     Real hardware: the ROS clock already is UTC (synced by chrony), offset = 0.
     Simulation (use_sim_time): the ROS clock starts near 0 when Gazebo starts, so
-    a constant offset (wall clock - sim clock, taken once) is added. Every message
-    goes through the same bridge, so images and telemetry stay on one clock.
+    an offset (wall clock - sim clock) is added. Every message goes through the same
+    bridge, so images and telemetry stay on one clock.
+
+    The sim usually runs slower than real time (RTF 0.7-0.9 with cameras), so a
+    constant offset makes ts fall behind the wall clock without limit (seen
+    2026-11-27: 54 s after 5 min -> Grafana showed old data). The offset therefore
+    follows the wall clock: inside +-deadband nothing changes; beyond it the offset
+    slews by at most `slew` x the elapsed wall time (ts stays smooth and, for
+    RTF > slew, monotonic); beyond `max_step` it jumps at once (pause, start-up).
     """
 
-    def __init__(self, use_sim_time: bool):
+    def __init__(self, use_sim_time: bool, deadband_us: int = 500_000, slew: float = 0.5,
+                 max_step_us: int = 10_000_000):
         self.use_sim_time = use_sim_time
         self._offset: Optional[int] = None if use_sim_time else 0
         self._last_ros: Optional[int] = None
-        self.relatches = 0
+        self._last_wall: Optional[int] = None
+        self.deadband_us = deadband_us
+        self.slew = slew
+        self.max_step_us = max_step_us
+        self.relatches = 0      # sim clock jumped back (Gazebo restarted)
+        self.jumps = 0          # drift > max_step corrected at once
+        self.error_us = 0       # last wall - mapped(ros_now) before correction (> 0: ts behind real time)
 
     def latch(self, wall_now_us: int, ros_now_us: int) -> None:
-        """Take the offset once; take it again if the sim clock jumps back (Gazebo restarted)."""
+        """Take the offset on the first sim clock; keep it near the wall clock afterwards."""
         if not self.use_sim_time or ros_now_us <= 0:
             return
+        wall_now_us, ros_now_us = int(wall_now_us), int(ros_now_us)
         if self._offset is not None and self._last_ros is not None and ros_now_us < self._last_ros - 1_000_000:
             self._offset = None
             self.relatches += 1
         if self._offset is None:
-            self._offset = int(wall_now_us) - int(ros_now_us)
-        self._last_ros = int(ros_now_us)
+            self._offset = wall_now_us - ros_now_us
+            self.error_us = 0
+        else:
+            err = wall_now_us - (ros_now_us + self._offset)
+            self.error_us = err
+            if abs(err) > self.max_step_us:
+                self._offset += err
+                self.jumps += 1
+            elif abs(err) > self.deadband_us and self._last_wall is not None:
+                step = min(abs(err) - self.deadband_us, int(max(0, wall_now_us - self._last_wall) * self.slew))
+                self._offset += step if err > 0 else -step
+        self._last_ros = ros_now_us
+        self._last_wall = wall_now_us
 
     @property
     def ready(self) -> bool:

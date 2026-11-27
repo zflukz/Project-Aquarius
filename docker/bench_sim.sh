@@ -7,7 +7,7 @@
 #   DRONES=3 DURATION=120 ./bench_sim.sh both
 #
 # Same workload in both modes: N PX4 SITL instances in one Gazebo world, idle on the ground,
-# no GUI / QGC by default. Measured per run:
+# no GUI by default. Measured per run:
 #   boot_s   start -> every instance finished rcS ("Startup script returned successfully")
 #   ready_s  start -> every instance has a valid home position (GPS + EKF ok, ready to arm)
 #   rtf      Gazebo real-time factor over DURATION s = d(sim time) / d(wall time)  (1.0 = real time)
@@ -141,7 +141,7 @@ start_docker() {
     # shellcheck disable=SC2086
     CONTROL_HOST=${CONTROL_HOST:-127.0.0.1} PX4_NUM_DRONES=$DRONES PX4_GZ_WORLD=$WORLD \
     PX4_SIM_MODEL=$MODEL PX4_SYS_AUTOSTART=$AUTOSTART DRONE_SPACING=$SPACING \
-    HEADLESS=$HEADLESS QGC=0 GZ_FOLLOW= AUTO_RUN= \
+    HEADLESS=$HEADLESS GZ_FOLLOW= AUTO_RUN= \
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $svc >/dev/null 2>&1
 }
 
