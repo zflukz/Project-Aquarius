@@ -1,10 +1,10 @@
 {
   "world": "kmutt",
-  "spawn_z": 7.0,
+  "static": true,
   "persons": [
-    {"label": "person_01", "model": "OpenRobotics/Casual female",   "x": -75, "y": -60, "pose": "standing", "yaw": 0.5},
-    {"label": "person_02", "model": "OpenRobotics/Standing person", "x": -55, "y": -62, "pose": "standing", "yaw": 2.0},
-    {"label": "person_03", "model": "OpenRobotics/Rescue Randy",    "x": -72, "y": -44, "pose": "lying", "z": 7.2},
-    {"label": "person_04", "model": "OpenRobotics/Casual female",   "x": -52, "y": -45, "pose": "lying", "z": 7.2, "yaw": 1.0}
+    {"label": "person_01", "model": "OpenRobotics/Standing person", "x": -47, "y": -51, "z": 6.65, "pose": "standing", "yaw": 0.5},
+    {"label": "person_02", "model": "OpenRobotics/Standing person", "x": -55, "y": -62, "z": 6.72, "pose": "standing", "yaw": 2.0},
+    {"label": "person_03", "model": "OpenRobotics/Standing person", "x": -54, "y": -53, "z": 6.72, "pose": "standing", "yaw": 4.0},
+    {"label": "person_04", "model": "OpenRobotics/Standing person", "x": -47, "y": -63, "z": 6.63, "pose": "standing", "yaw": 1.0}
   ]
 }
