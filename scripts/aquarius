@@ -28,7 +28,8 @@
 #
 # Missions run in the background (Docker: inside drone-control, native: Drone-Control/.venv), so
 # Ctrl+C only stops following the log — the drone keeps flying. Stop it with `aquarius rtl` / `land`.
-# Mode: Docker if the drone-control container runs, else native (scripts/install_control_computer.sh).
+# Mode: Docker if the drone-control container runs, else native (scripts/install_control_computer.sh: standalone
+# copy in ~/aquarius-control, no repo needed; AQUARIUS_CONTROL_DIR overrides the Drone-Control folder).
 # Env: AQUARIUS_DOCKER_DIR (compose files + .env, default <repo>/docker or the current directory)
 #      AQUARIUS_BRANCH (update without git: raw GitHub files from this branch, default main)
 set -e
@@ -40,7 +41,12 @@ elif [ -f "$REPO_DIR/docker/compose.local.yml" ]; then DOCKER_DIR=$REPO_DIR/dock
 elif ls "$SCRIPT_DIR"/compose.*.yml > /dev/null 2>&1; then DOCKER_DIR=$SCRIPT_DIR   # VM: copy next to compose.server.yml
 else DOCKER_DIR=$PWD; fi
 DC_DIR=/drone-control           # Drone-Control/ inside the drone-control image
-NATIVE_PY=$REPO_DIR/Drone-Control/.venv/bin/python
+# Drone-Control scripts for native mode: standalone install (install_control_computer.sh copies them next to this
+# script: ~/aquarius-control/{aquarius,Drone-Control}) or a repo checkout (<repo>/Drone-Control)
+if [ -n "$AQUARIUS_CONTROL_DIR" ]; then CTRL_DIR=$AQUARIUS_CONTROL_DIR
+elif [ -d "$SCRIPT_DIR/Drone-Control" ]; then CTRL_DIR=$SCRIPT_DIR/Drone-Control
+else CTRL_DIR=$REPO_DIR/Drone-Control; fi
+NATIVE_PY=$CTRL_DIR/.venv/bin/python
 export MSYS_NO_PATHCONV=1       # Git Bash: keep /tmp/... paths for docker exec
 
 die()  { echo "aquarius: $*" >&2; exit 1; }
@@ -96,7 +102,7 @@ run_fg() {   # python script + args, wait for it
         docker exec drone-control bash -c "source /opt/ros/jazzy/setup.bash; cd $DC_DIR && $(pyenv) python3 -u $(q "$@")"
     else
         [ -x "$NATIVE_PY" ] || die "no drone-control container and no $NATIVE_PY — run 'aquarius init' or scripts/install_control_computer.sh"
-        (cd "$REPO_DIR/Drone-Control" && env $(pyenv) "$NATIVE_PY" -u "$@")
+        (cd "$CTRL_DIR" && env $(pyenv) "$NATIVE_PY" -u "$@")
     fi
 }
 
@@ -120,8 +126,8 @@ run_bg() {   # job script args... — start in the background, then follow the l
     if use_docker; then
         docker exec -d drone-control bash -c "source /opt/ros/jazzy/setup.bash; cd $DC_DIR && echo \$\$ > $pid && exec env $(pyenv) python3 -u $(q "$@") > $log 2>&1"
     else
-        [ -x "$NATIVE_PY" ] || die "no drone-control container and no $NATIVE_PY"
-        (cd "$REPO_DIR/Drone-Control" && nohup env $(pyenv) "$NATIVE_PY" -u "$@" > "$log" 2>&1 & echo $! > "$pid")
+        [ -x "$NATIVE_PY" ] || die "no drone-control container and no $NATIVE_PY — run scripts/install_control_computer.sh"
+        (cd "$CTRL_DIR" && nohup env $(pyenv) "$NATIVE_PY" -u "$@" > "$log" 2>&1 & echo $! > "$pid")
     fi
     sleep 1
     info "$job started for drone $DRONE (log: aquarius logs $job --drone $DRONE)"
@@ -152,7 +158,7 @@ free_link() {
             for j in mission coverage; do p=\$(cat /tmp/aquarius-\$j-$DRONE.pid 2>/dev/null) && kill \$p 2>/dev/null; done
             pkill -f '[m]avsdk_server.*:$port\b' 2>/dev/null; true"
     else
-        for j in mission coverage; do p=$(cat "/tmp/aquarius-$j-$DRONE.pid" 2>/dev/null) && kill "$p" 2>/dev/null; done
+        for j in mission coverage; do p=$(cat "/tmp/aquarius-$j-$DRONE.pid" 2>/dev/null) && kill "$p" 2>/dev/null || true; done
         pkill -f "[m]avsdk_server.*:$port\b" 2>/dev/null || true
     fi
     sleep 1

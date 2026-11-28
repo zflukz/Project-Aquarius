@@ -15,7 +15,9 @@ aquarius rtl
 ## 1. Install
 
 Needs **bash** (Linux, macOS, or Git Bash on Windows) plus **Docker**, or the native install
-(`scripts/install_control_computer.sh`).
+(`scripts/install_control_computer.sh`: copies `aquarius` + the Drone-Control scripts + a mavsdk-grpc venv to
+`~/aquarius-control` — the control computer / WSL needs no repo; run it from e.g. the Windows checkout
+`bash /mnt/c/…/Xenoir/scripts/install_control_computer.sh --no-ros`, later `--update`).
 
 ```bash
 cd Project-Aquarius

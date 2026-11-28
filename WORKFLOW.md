@@ -228,10 +228,11 @@ CONTROL_HOST=<CONTROL_COMPUTER_IP> PX4_NUM_DRONES=1 HEADLESS=1 bash scripts/run_
 bash scripts/install_telemetry_server.sh
 PX4_NUM_DRONES=1 bash scripts/run_telemetry_native.sh
 
-# control computer: ROS 2 (Jazzy on 24.04, Humble on 22.04) + mavsdk-grpc in Drone-Control/.venv
-bash scripts/install_control_computer.sh
-source /opt/ros/jazzy/setup.bash && source Drone-Control/.venv/bin/activate
-cd Drone-Control && python3 flight_test.py          # DRONE_ID / NUM_DRONES as in Docker
+# control computer / WSL — standalone copy in ~/aquarius-control (no repo needed there): Drone-Control scripts +
+# mavsdk-grpc venv + `aquarius` in ~/.local/bin. Run it from any repo copy, e.g. the Windows checkout inside WSL:
+bash /mnt/c/Users/<you>/.../Xenoir/scripts/install_control_computer.sh --no-ros   # --no-ros: missions don't need ROS 2
+bash /mnt/c/Users/<you>/.../Xenoir/scripts/install_control_computer.sh --update   # after git pull: copy scripts again
+aquarius status --drone 0 && aquarius start coverage 13.6509,100.4939 --size 40x30 --drones 2 --alt 40
 
 # native vs Docker speed on the VM
 bash docker/bench_sim.sh both
@@ -469,7 +470,7 @@ Project-Aquarius/
 │   ├── run_sim_native.sh           native twin of px4-sim/entrypoint.sh (N drones, same ports)
 │   ├── install_telemetry_server.sh native telemetry stack (ROS 2 + XRCE agent + px4_msgs from PX4)
 │   ├── run_telemetry_native.sh     native twin of the telemetry container
-│   ├── install_control_computer.sh native control computer install (ROS 2 + mavsdk-grpc venv)
+│   ├── install_control_computer.sh native control computer / WSL: standalone ~/aquarius-control (+ ROS 2 unless --no-ros)
 │   └── uninstall_*.sh              remove the native installs
 └── Drone-Control/
     ├── teleop_drone.py             keyboard controller → PX4 via MAVSDK (DRONE_ID)

@@ -1261,3 +1261,25 @@ profile pipeline; settings as shell env, `.env` not read).
   failed: participant: 255` / `session setup failed` — same PX4 uXRCE reconnect crash as 2026-11-08, now also at start
   under heavy load. Clean restart on an idle machine: drone 0 3.5 min, drone 1 +2.5 min, no crash.
 
+## Change log — standalone control install for WSL (2026-11-27)
+
+User: WSL (control side, own Tailscale `100.99.66.40`; server VM = `100.96.241.4`, Windows `100.81.42.15` — from
+`tailscale status`; WORKFLOW 1e still lists the old guess) does not have the repo → installer + CLI must work alone.
+- **`scripts/install_control_computer.sh`** rewritten: copies `Drone-Control/*.py` + `scripts/aquarius` from the repo
+  copy it is started from (e.g. `/mnt/c/.../Xenoir`) to `AQUARIUS_HOME` (default `~/aquarius-control`), strips CRLF
+  (Windows checkout of the .py files is CRLF), venv `Drone-Control/.venv` + `mavsdk-grpc` (import checked), links
+  `~/.local/bin/aquarius`. Options `--update` (copy only, keep venv, no apt), `--no-ros` (ROS 2 only needed for
+  `view_cam.py`), `--home DIR`. Dropped: `ros-gz-bridge` / colcon packages, old IP-patch cleanup. Prints
+  `CONTROL_HOST=<tailscale ip -4>` for the server `.env`. Bug fixed while testing: `IP=$(…tailscale…)` failed without
+  tailscale → `set -e` exit before the summary.
+- **`scripts/aquarius`:** native Drone-Control folder = `AQUARIUS_CONTROL_DIR` → `<script dir>/Drone-Control`
+  (standalone) → `<repo>/Drone-Control`; `free_link` no longer exits on a stale pid file (`kill` was the last command
+  of an `&&` list under `set -e`).
+- `uninstall_control_computer.sh` also removes `~/aquarius-control` + the link. Docs: WORKFLOW 1d / file map,
+  AQUARIUS_CLI install section.
+- **Tested** in a fresh `ubuntu:24.04` container (repo mounted read-only at `/mnt/c/Users/Flukz/University/Y4/Xenoir`,
+  non-root user with sudo): `--no-ros` install exit 0, `--update` exit 0 (venv kept), 0 CR in the copies,
+  `aquarius --help`, `mcpp_mission.py --plan-only -n 2` (24 + 24 cells), `aquarius status --drone 0` in native mode
+  listens on udp 14540 (no sim running — the local stack had been stopped). Not tested: a real flight from WSL, ROS
+  install branch.
+

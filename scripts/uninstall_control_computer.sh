@@ -12,8 +12,11 @@ done
 # leftover MAVSDK servers keep udp 14540+ busy (see CLAUDE.md gotchas)
 pkill -f "mavsdk_server" 2>/dev/null || true
 
-echo ">>> [2/3] Remove Python venv"
+echo ">>> [2/3] Remove Python venv + standalone copy (~/aquarius-control, ~/.local/bin/aquarius)"
 rm -rf "$PROJECT_DIR/Drone-Control/.venv"
+AQUARIUS_HOME=${AQUARIUS_HOME:-$HOME/aquarius-control}
+[ -f "$AQUARIUS_HOME/aquarius" ] && rm -rf "$AQUARIUS_HOME"
+[ -L "$HOME/.local/bin/aquarius" ] && rm -f "$HOME/.local/bin/aquarius"
 rm -f  "$PROJECT_DIR/Drone-Control/.env"   # written by old versions of the install script
 
 echo ">>> [3/3] Remove ROS 2 packages and apt repo (Jazzy and/or Humble)"
